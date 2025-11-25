@@ -75,4 +75,7 @@ generic_spram #(.KB(8)) u_mem (
   .mask (mem_mask   )
 );
 
+logic [31:0] commit_pc_mon /* verilator public_flat */;
+always_comb commit_pc_mon = u_dut.decode.pc;
+
 endmodule

@@ -45,3 +45,15 @@ add_executable(kronos_compliance
 target_link_libraries(kronos_compliance
   verilated-kronos_compliance_top
 )
+
+# -------------------------------------------------------------
+# Generic ELF simulation runner (Verilator + C++)
+#   Accepts an ELF path and runs the verilated core.
+#   Links against the same kronos_compliance_top (with generic_spram).
+add_executable(kronos_elfsim
+  kronos_elfsim.cpp
+)
+
+target_link_libraries(kronos_elfsim
+  verilated-kronos_compliance_top
+)

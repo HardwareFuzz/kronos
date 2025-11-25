@@ -10,9 +10,10 @@ if(NOT VERILATOR_FOUND)
 endif()
 
 if (NOT VERILATOR_ENV_SETUP)
-  # Make common verilator shared lib
-  add_library(verilated SHARED
+  # Build verilator support library as static to avoid runtime .so dependency
+  add_library(verilated STATIC
     ${VERILATOR_INCLUDES}/verilated.cpp
+    ${VERILATOR_INCLUDES}/verilated_threads.cpp
     ${VERILATOR_INCLUDES}/verilated_vcd_c.cpp
   )
 
@@ -97,7 +98,7 @@ function(verilate_hdl)
     COMMAND
       ${VERILATOR_BIN}
     ARGS
-      -O3 -Wall -cc --trace -Mdir .
+      -O3 -Wall --Wno-fatal -cc --trace -Mdir .
       --prefix ${ARG_NAME}
       --top-module ${ARG_NAME}
       ${includes}

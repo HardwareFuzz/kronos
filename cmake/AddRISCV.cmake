@@ -87,7 +87,7 @@ function(add_riscv_executable source)
       ${RISCV_GCC}
     ARGS
       -O2
-      -march=rv32i
+      -march=rv32i_zicsr_zifencei
       -mabi=ilp32
       -static
       -nostartfiles
