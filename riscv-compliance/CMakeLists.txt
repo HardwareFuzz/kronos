@@ -57,3 +57,7 @@ add_executable(kronos_elfsim
 target_link_libraries(kronos_elfsim
   verilated-kronos_compliance_top
 )
+
+if (VERILATOR_COVERAGE)
+  target_compile_definitions(kronos_elfsim PRIVATE VM_COVERAGE=1)
+endif()

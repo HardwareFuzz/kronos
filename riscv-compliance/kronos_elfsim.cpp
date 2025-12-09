@@ -21,6 +21,7 @@
 
 #include <verilated.h>
 #include <verilated_vcd_c.h>
+#include <verilated_cov.h>
 
 #include "kronos_compliance_top.h"
 #include "kronos_compliance_top___024root.h"
@@ -284,7 +285,7 @@ class Sim {
 static void print_usage() {
   cout << "Usage:\n"
           "  kronos_elfsim <program.elf> [--vcd out.vcd] [--max-cycles N] "
-          "[--mem-kb KB]\n";
+          "[--mem-kb KB] [--covfile path]\n";
 }
 
 int main(int argc, char **argv) {
@@ -292,6 +293,8 @@ int main(int argc, char **argv) {
     print_usage();
     return 1;
   }
+
+  Verilated::commandArgs(argc, argv);
 
   string elf = argv[1];
   string vcd;
@@ -302,6 +305,8 @@ int main(int argc, char **argv) {
   uint32_t pass_value = 1;
   bool log_reg=false, log_mem=false, log_trap=false;
   string log_file;
+  string cov_file = "logs/coverage.dat";
+  bool cov_file_cli = false;  // track if user passed --covfile
 
   for (int i = 2; i < argc; ++i) {
     string a = argv[i];
@@ -330,6 +335,9 @@ int main(int argc, char **argv) {
       }
     } else if (a == "--log-file" && (i + 1) < argc) {
       log_file = argv[++i];
+    } else if (a == "--covfile" && (i + 1) < argc) {
+      cov_file = argv[++i];
+      cov_file_cli = true;
     } else {
       cerr << "Unknown or incomplete option: " << a << endl;
       print_usage();
@@ -337,7 +345,30 @@ int main(int argc, char **argv) {
     }
   }
 
+#if !VM_COVERAGE
+  (void)cov_file;
+#endif
+
   try {
+#if VM_COVERAGE
+    // Honor +covfile=<path> only if user did not pass --covfile.
+    if (!cov_file_cli) {
+      if (const char* cov_arg = Verilated::commandArgsPlusMatch("covfile=")) {
+        const char* val = cov_arg + std::strlen("+covfile=");
+        if (*val) cov_file = val;
+      }
+    }
+    // Emit the final coverage path so it is obvious which file will be written.
+    cout << "Coverage output: " << cov_file << endl;
+    const auto slash_pos = cov_file.find_last_of('/');
+    if (slash_pos != std::string::npos && slash_pos != 0) {
+      Verilated::mkdir(cov_file.substr(0, slash_pos).c_str());
+    } else {
+      Verilated::mkdir("logs");
+    }
+    Verilated::threadContextp()->coveragep()->zero();
+#endif
+
     Sim sim(mem_kb);
     sim.start_trace(vcd);
     sim.reset();
@@ -346,6 +377,10 @@ int main(int argc, char **argv) {
     sim.run(max_cycles, watch_tohost, tohost_addr, pass_value);
     sim.stop_trace();
     cout << "Done. Ticks: " << sim.ticks() << endl;
+#if VM_COVERAGE
+    Verilated::threadContextp()->coveragep()->write(cov_file.c_str());
+    cout << "Coverage: " << cov_file << endl;
+#endif
   } catch (const std::exception &e) {
     cerr << "Error: " << e.what() << endl;
     return 2;
