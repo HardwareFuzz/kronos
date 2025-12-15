@@ -90,11 +90,11 @@ class Sim {
 
   ~Sim() { delete top_; }
 
-  void reset(unsigned cycles = 5) {
+  void reset_and_load(const string &elf_path, unsigned cycles = 5) {
     top_->rstz = 0;
     for (unsigned i = 0; i < cycles; ++i) tick();
+    load_elf(elf_path);
     top_->rstz = 1;
-    for (unsigned i = 0; i < cycles; ++i) tick();
   }
 
   void start_trace(const string &vcd_file) {
@@ -371,9 +371,9 @@ int main(int argc, char **argv) {
 
     Sim sim(mem_kb);
     sim.start_trace(vcd);
-    sim.reset();
+    sim.reset_and_load(elf);
     sim.enable_logging(log_reg, log_mem, log_trap, log_file);
-    sim.load_elf(elf);
+    // sim.load_elf(elf);
     sim.run(max_cycles, watch_tohost, tohost_addr, pass_value);
     sim.stop_trace();
     cout << "Done. Ticks: " << sim.ticks() << endl;
