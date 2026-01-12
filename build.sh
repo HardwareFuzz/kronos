@@ -26,7 +26,7 @@ usage() {
   cat <<'EOF'
 Usage: ./build.sh [--coverage|--coverage-light|--no-coverage] [--clean] [--help]
 
-Build the Verilator ELF simulator (kronos_rv32). By default, builds the
+Build the Verilator ELF simulator (kronos_rv32). Default build is 2-core.
 non-coverage variant. Use --coverage to build the full coverage-instrumented
 variant (kronos_rv32_cov), or --coverage-light for line/user-only coverage
 (kronos_rv32_cov_light). Use --clean to remove the build cache/output for
@@ -42,6 +42,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BIN_NAME="kronos_elfsim"
 RESULT_DIR="${ROOT_DIR}/build_result"
 COVERAGE_MODE="none"
+CORES="${CORES:-2}"
 CLEAN=0
 
 while [[ $# -gt 0 ]]; do
@@ -59,15 +60,15 @@ done
 case "$COVERAGE_MODE" in
   full)
     BUILD_DIR="${ROOT_DIR}/build_cov"
-    OUT_NAME="kronos_rv32_cov"
+    OUT_NAME="kronos_rv32_${CORES}c_cov"
     ;;
   light)
     BUILD_DIR="${ROOT_DIR}/build_cov_light"
-    OUT_NAME="kronos_rv32_cov_light"
+    OUT_NAME="kronos_rv32_${CORES}c_cov_light"
     ;;
   none)
     BUILD_DIR="${ROOT_DIR}/build"
-    OUT_NAME="kronos_rv32"
+    OUT_NAME="kronos_rv32_${CORES}c"
     ;;
 esac
 

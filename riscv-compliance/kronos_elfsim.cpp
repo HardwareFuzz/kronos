@@ -209,18 +209,8 @@ class Sim {
     if (!(log_reg_ || log_mem_ || log_trap_)) return;
     auto& R = *(top_->rootp);
     uint32_t commit_pc = R.kronos_compliance_top__DOT__commit_pc_mon;
-    uint32_t pc = wb_pc_valid_ ? wb_pc_ : commit_pc;
+    uint32_t pc = commit_pc;
     bool did_commit = false;
-
-    if (log_reg_ && R.kronos_compliance_top__DOT__u_dut__DOT__regwr_en) {
-      uint32_t pc_reg = prev_pc_mon_;
-      uint32_t rd = R.kronos_compliance_top__DOT__u_dut__DOT__regwr_sel & 0x1fu;
-      uint32_t rdv = R.kronos_compliance_top__DOT__u_dut__DOT__regwr_data;
-      (*log_out_) << "[REG] pc=0x" << std::hex << pc_reg
-                  << " x" << std::dec << rd
-                  << " <= 0x" << std::hex << rdv << std::dec << "\n";
-      did_commit = true;
-    }
     if (log_mem_ && top_->data_req && top_->data_wr_en) {
       uint32_t addr = top_->data_addr;
       uint32_t wdata = top_->data_wr_data;
@@ -232,30 +222,10 @@ class Sim {
                   << " mask=0x" << mask << std::dec << "\n";
       did_commit = true;
     }
-    if (log_trap_) {
-      uint8_t exception_flag = R.kronos_compliance_top__DOT__u_dut__DOT__u_ex__DOT__exception;
-      uint8_t trap_jump_flag = R.kronos_compliance_top__DOT__u_dut__DOT__u_ex__DOT__trap_jump;
-      uint8_t irq_flag = R.kronos_compliance_top__DOT__u_dut__DOT__u_ex__DOT__core_interrupt;
-      if (exception_flag || trap_jump_flag || irq_flag) {
-        uint32_t cause = R.kronos_compliance_top__DOT__u_dut__DOT__u_ex__DOT__trap_cause;
-        (*log_out_) << "[TRAP] pc=0x" << std::hex << pc
-                    << " exception=" << static_cast<int>(exception_flag)
-                    << " trap_jump=" << static_cast<int>(trap_jump_flag)
-                    << " irq=" << static_cast<int>(irq_flag)
-                    << " cause=0x" << cause << std::dec << "\n";
-      }
-    }
-
-    if (did_commit) {
-      wb_pc_valid_ = false;
-      if (R.kronos_compliance_top__DOT__u_dut__DOT__u_ex__DOT__instr_vld && !wb_pc_valid_) {
-        wb_pc_ = commit_pc;
-        wb_pc_valid_ = true;
-      }
-    } else {
-      if (R.kronos_compliance_top__DOT__u_dut__DOT__u_ex__DOT__instr_vld && !wb_pc_valid_) {
-        wb_pc_ = commit_pc;
-        wb_pc_valid_ = true;
+    if (log_reg_ || log_trap_) {
+      if (!warned_) {
+        (*log_out_) << "[WARN] reg/trap logging disabled in multicore build\n";
+        warned_ = true;
       }
     }
     prev_pc_mon_ = commit_pc;
@@ -280,6 +250,7 @@ class Sim {
   uint32_t wb_pc_ = 0;
   bool wb_pc_valid_ = false;
   uint32_t prev_pc_mon_ = 0;
+  bool warned_ = false;
 };
 
 static void print_usage() {
