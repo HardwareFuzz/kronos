@@ -58,6 +58,10 @@ target_link_libraries(kronos_elfsim
   verilated-kronos_compliance_top
 )
 
-if (VERILATOR_COVERAGE)
+# Note: `VERILATOR_COVERAGE` is not a standard/guaranteed CMake flag and may
+# be unset even when we invoke Verilator with coverage options. Use the
+# configured coverage mode to decide whether to compile in the VM_COVERAGE
+# runner hooks that write `coverage.dat`.
+if (NOT VERILATOR_COVERAGE_MODE STREQUAL "none")
   target_compile_definitions(kronos_elfsim PRIVATE VM_COVERAGE=1)
 endif()

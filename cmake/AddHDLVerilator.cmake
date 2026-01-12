@@ -93,8 +93,10 @@ function(verilate_hdl)
   file(MAKE_DIRECTORY ${working_dir})
 
   set(coverage_flag)
-  if (VERILATOR_COVERAGE)
+  if (VERILATOR_COVERAGE_MODE STREQUAL "full")
     set(coverage_flag --coverage)
+  elseif (VERILATOR_COVERAGE_MODE STREQUAL "light")
+    set(coverage_flag --coverage-line --coverage-user --coverage-max-width 0)
   endif()
 
   # Verilate HDL and compile it

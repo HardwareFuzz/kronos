@@ -28,7 +28,8 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${LIB_OUTPUT_DIR})
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${LIB_OUTPUT_DIR})
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${BIN_OUTPUT_DIR})
 
-option(VERILATOR_COVERAGE "Enable Verilator coverage instrumentation" OFF)
+set(VERILATOR_COVERAGE_MODE "none" CACHE STRING "Verilator coverage mode: none, full, or light")
+set_property(CACHE VERILATOR_COVERAGE_MODE PROPERTY STRINGS none full light)
 
 # =============================================================
 if (${CMAKE_BUILD_TYPE} MATCHES "Dev")

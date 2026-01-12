@@ -1,6 +1,7 @@
 build
 build_cov
+build_cov_light
 logs
-build_result/kronos_rv32_cov
+build_result/
 *.log
 *.pyc
