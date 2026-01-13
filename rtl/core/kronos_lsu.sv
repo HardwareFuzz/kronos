@@ -13,11 +13,18 @@ Memory Access needs to be aligned.
 
 module kronos_lsu
   import kronos_types::*;
-(
+#(
+  parameter STBUF_ENABLE = 0,
+  parameter STBUF_ALLOW_LOAD_BYPASS = 0,
+  parameter STBUF_CONFLICT_STALL = 1
+)(
   // ID/EX
+  input  logic        clk,
+  input  logic        rstz,
   input  pipeIDEX_t   decode,
   input  logic        lsu_vld,
   output logic        lsu_rdy,
+  output logic        stbuf_empty,
   // Register write-back
   output logic [31:0] load_data,
   output logic        regwr_lsu,
@@ -39,6 +46,26 @@ logic load_uns;
 logic [3:0][7:0] ldata;
 logic [31:0] word_data, half_data, byte_data;
 
+logic stbuf_valid;
+logic stbuf_req_active;
+logic [31:0] stbuf_addr;
+logic [31:0] stbuf_data;
+logic [3:0]  stbuf_mask;
+
+wire decode_load = lsu_vld && decode.load;
+wire decode_store = lsu_vld && decode.store;
+wire decode_mem = decode_load || decode_store;
+
+wire stbuf_conflict = stbuf_valid && (decode.addr[31:2] == stbuf_addr[31:2]);
+wire load_blocked = STBUF_ENABLE && stbuf_valid &&
+                    (!STBUF_ALLOW_LOAD_BYPASS || (STBUF_CONFLICT_STALL && stbuf_conflict));
+wire store_buffered = STBUF_ENABLE && decode_store && !stbuf_valid;
+wire store_blocked = STBUF_ENABLE && decode_store && stbuf_valid;
+wire decode_req_active = decode_mem && !load_blocked && !store_buffered && !store_blocked && !stbuf_req_active;
+wire use_stbuf_req = stbuf_req_active;
+
+assign stbuf_empty = ~(stbuf_valid || stbuf_req_active);
+
 // ============================================================
 // IR Segments
 assign byte_addr = decode.addr[1:0];
@@ -48,15 +75,41 @@ assign rd  = decode.ir[11:7];
 
 // ============================================================
 // Memory interface
-assign data_addr = {decode.addr[31:2], 2'b0};
-assign data_wr_data = decode.op2;
-assign data_mask = decode.mask;
-assign data_wr_en = lsu_vld && decode.store && ~data_ack;
-assign data_req = lsu_vld && (decode.load | decode.store) && ~data_ack;
+assign data_addr = use_stbuf_req ? {stbuf_addr[31:2], 2'b0} : {decode.addr[31:2], 2'b0};
+assign data_wr_data = use_stbuf_req ? stbuf_data : decode.op2;
+assign data_mask = use_stbuf_req ? stbuf_mask : decode.mask;
+assign data_wr_en = ~data_ack && (use_stbuf_req || (decode_req_active && decode.store));
+assign data_req = ~data_ack && (use_stbuf_req || decode_req_active);
 
 // response controls
-assign lsu_rdy = data_ack;
+assign lsu_rdy = store_buffered || (decode_req_active && data_ack);
 assign regwr_lsu = decode.load && rd != '0;
+
+// ============================================================
+// Store buffer control
+always_ff @(posedge clk or negedge rstz) begin
+  if (~rstz) begin
+    stbuf_valid <= 1'b0;
+    stbuf_req_active <= 1'b0;
+  end
+  else begin
+    if (stbuf_req_active && data_ack) begin
+      stbuf_req_active <= 1'b0;
+      stbuf_valid <= 1'b0;
+    end
+
+    if (store_buffered) begin
+      stbuf_valid <= 1'b1;
+      stbuf_addr <= decode.addr;
+      stbuf_data <= decode.op2;
+      stbuf_mask <= decode.mask;
+    end
+
+    if (!stbuf_req_active && stbuf_valid && !decode_req_active && !store_buffered) begin
+      stbuf_req_active <= 1'b1;
+    end
+  end
+end
 
 // ============================================================
 // Load

@@ -15,7 +15,11 @@ module kronos_core
   parameter EN_COUNTERS64B = 1,
   parameter CATCH_ILLEGAL_INSTR = 1,
   parameter CATCH_MISALIGNED_JMP = 1,
-  parameter CATCH_MISALIGNED_LDST = 1
+  parameter CATCH_MISALIGNED_LDST = 1,
+  parameter STBUF_ENABLE = 0,
+  parameter STBUF_ALLOW_LOAD_BYPASS = 0,
+  parameter STBUF_CONFLICT_STALL = 1,
+  parameter FENCE_DRAIN_STBUF = 1
 )(
   input  logic        clk,
   input  logic        rstz,
@@ -120,7 +124,11 @@ kronos_ID #(
 kronos_EX #(
   .BOOT_ADDR     (BOOT_ADDR),
   .EN_COUNTERS   (EN_COUNTERS),
-  .EN_COUNTERS64B(EN_COUNTERS64B)
+  .EN_COUNTERS64B(EN_COUNTERS64B),
+  .STBUF_ENABLE(STBUF_ENABLE),
+  .STBUF_ALLOW_LOAD_BYPASS(STBUF_ALLOW_LOAD_BYPASS),
+  .STBUF_CONFLICT_STALL(STBUF_CONFLICT_STALL),
+  .FENCE_DRAIN_STBUF(FENCE_DRAIN_STBUF)
 ) u_ex (
   .clk               (clk               ),
   .rstz              (rstz              ),

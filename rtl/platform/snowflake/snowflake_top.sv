@@ -13,7 +13,12 @@ IO:
 
 */
 
-module snowflake_top (
+module snowflake_top #(
+  parameter STBUF_ENABLE = 0,
+  parameter STBUF_ALLOW_LOAD_BYPASS = 0,
+  parameter STBUF_CONFLICT_STALL = 1,
+  parameter FENCE_DRAIN_STBUF = 1
+) (
   input  logic RSTN,
   output logic LEDR,
   output logic LEDG,
@@ -89,7 +94,11 @@ kronos_core #(
   .EN_COUNTERS64B(0),
   .CATCH_ILLEGAL_INSTR(1),
   .CATCH_MISALIGNED_JMP(1),
-  .CATCH_MISALIGNED_LDST(1)
+  .CATCH_MISALIGNED_LDST(1),
+  .STBUF_ENABLE(STBUF_ENABLE),
+  .STBUF_ALLOW_LOAD_BYPASS(STBUF_ALLOW_LOAD_BYPASS),
+  .STBUF_CONFLICT_STALL(STBUF_CONFLICT_STALL),
+  .FENCE_DRAIN_STBUF(FENCE_DRAIN_STBUF)
 ) u_core (
   .clk               (clk         ),
   .rstz              (rstz        ),

@@ -2,7 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 module kronos_compliance_top #(
-  parameter int unsigned NUM_CORES = 2
+  parameter int unsigned NUM_CORES = 2,
+  parameter STBUF_ENABLE = 0,
+  parameter STBUF_ALLOW_LOAD_BYPASS = 0,
+  parameter STBUF_CONFLICT_STALL = 1,
+  parameter FENCE_DRAIN_STBUF = 1
 ) (
   input  logic        clk,
   input  logic        rstz,
@@ -51,7 +55,12 @@ assign data_req    = data_req_c[0];
 assign data_ack    = data_ack_c[0];
 
 for (genvar i = 0; i < NUM_CORES; i++) begin : gen_cores
-  kronos_core u_core (
+  kronos_core #(
+    .STBUF_ENABLE(STBUF_ENABLE),
+    .STBUF_ALLOW_LOAD_BYPASS(STBUF_ALLOW_LOAD_BYPASS),
+    .STBUF_CONFLICT_STALL(STBUF_CONFLICT_STALL),
+    .FENCE_DRAIN_STBUF(FENCE_DRAIN_STBUF)
+  ) u_core (
     .clk               (clk              ),
     .rstz              (rstz             ),
     .instr_addr        (instr_addr_c[i]  ),

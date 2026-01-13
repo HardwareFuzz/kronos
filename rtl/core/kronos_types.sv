@@ -31,6 +31,8 @@ typedef struct packed {
     logic        csr;
     logic        system;
     logic [1:0]  sysop;
+    logic        fence;
+    logic        fencei;
     logic        illegal;
     logic        misaligned_jmp;
     logic        misaligned_ldst;

@@ -10,7 +10,11 @@ module kronos_EX
 #(
   parameter logic [31:0]  BOOT_ADDR = 32'h0,
   parameter EN_COUNTERS = 1,
-  parameter EN_COUNTERS64B = 1
+  parameter EN_COUNTERS64B = 1,
+  parameter STBUF_ENABLE = 0,
+  parameter STBUF_ALLOW_LOAD_BYPASS = 0,
+  parameter STBUF_CONFLICT_STALL = 1,
+  parameter FENCE_DRAIN_STBUF = 1
 )(
   input  logic        clk,
   input  logic        rstz,
@@ -45,8 +49,10 @@ logic [4:0] rd;
 logic instr_vld;
 logic instr_jump;
 logic basic_rdy;
+logic fence_hold;
 
 logic lsu_vld, lsu_rdy;
+logic lsu_stbuf_empty;
 logic [31:0] load_data;
 logic regwr_lsu;
 
@@ -110,7 +116,12 @@ always_comb begin
           WFI   : next_state = WFINTR;
         endcase
       end
-      else if (decode.load || decode.store) next_state = LSU;
+      else if (decode.load || decode.store) begin
+        // If the LSU can complete immediately (e.g. store buffered),
+        // stay in STEADY to avoid getting stuck in LSU state.
+        if (lsu_rdy) next_state = STEADY;
+        else next_state = LSU;
+      end
       else if (decode.csr) next_state = CSR;
     end
 
@@ -135,7 +146,8 @@ assign instr_vld = decode_vld && state == STEADY && ~exception && ~core_interrup
 assign instr_accept = decode_vld && decode_rdy;
 
 // Basic instructions
-assign basic_rdy = instr_vld && decode.basic;
+assign fence_hold = STBUF_ENABLE && FENCE_DRAIN_STBUF && decode.fence && instr_vld && !lsu_stbuf_empty;
+assign basic_rdy = instr_vld && decode.basic && !fence_hold;
 
 // Next instructions
 assign decode_rdy = |{basic_rdy, lsu_rdy, csr_rdy};
@@ -190,10 +202,17 @@ kronos_alu u_alu (
 // LSU
 assign lsu_vld = instr_vld || state == LSU;
 
-kronos_lsu u_lsu (
+kronos_lsu #(
+  .STBUF_ENABLE(STBUF_ENABLE),
+  .STBUF_ALLOW_LOAD_BYPASS(STBUF_ALLOW_LOAD_BYPASS),
+  .STBUF_CONFLICT_STALL(STBUF_CONFLICT_STALL)
+) u_lsu (
+  .clk         (clk         ),
+  .rstz        (rstz        ),
   .decode      (decode      ),
   .lsu_vld     (lsu_vld     ),
   .lsu_rdy     (lsu_rdy     ),
+  .stbuf_empty (lsu_stbuf_empty),
   .load_data   (load_data   ),
   .regwr_lsu   (regwr_lsu   ),
   .data_addr   (data_addr   ),
