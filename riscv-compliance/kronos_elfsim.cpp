@@ -348,6 +348,7 @@ int main(int argc, char **argv) {
     sim.run(max_cycles, watch_tohost, tohost_addr, pass_value);
     sim.stop_trace();
     cout << "Done. Ticks: " << sim.ticks() << endl;
+    cout << "Cycles: " << (sim.ticks() / 2) << endl;
 #if VM_COVERAGE
     Verilated::threadContextp()->coveragep()->write(cov_file.c_str());
     cout << "Coverage: " << cov_file << endl;
