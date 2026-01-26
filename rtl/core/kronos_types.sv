@@ -128,6 +128,9 @@ parameter logic [11:0] MSTATUS      = 12'h300;
 parameter logic [11:0] MIE          = 12'h304;
 parameter logic [11:0] MTVEC        = 12'h305;
 
+// Machine Hart ID (read-only)
+parameter logic [11:0] MHARTID      = 12'hF14;
+
 parameter logic [11:0] MSCRATCH     = 12'h340;
 parameter logic [11:0] MEPC         = 12'h341;
 parameter logic [11:0] MCAUSE       = 12'h342;

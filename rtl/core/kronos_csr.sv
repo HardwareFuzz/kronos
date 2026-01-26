@@ -30,6 +30,8 @@ module kronos_csr
   import kronos_types::*;
 #(
   parameter logic [31:0]  BOOT_ADDR = 32'h0,
+  // Expose mhartid for multi-core software.
+  parameter logic [31:0]  HARTID = 32'h0,
   parameter EN_COUNTERS = 1,
   parameter EN_COUNTERS64B = 1
 )(
@@ -214,6 +216,9 @@ always_comb begin
     MINSTRET  : csr_rd_data = minstret[31:0];
     MCYCLEH   : csr_rd_data = mcycle[63:32];
     MINSTRETH : csr_rd_data = minstret[63:32];
+
+    // Multi-hart support
+    MHARTID   : csr_rd_data = HARTID;
   endcase // addr
   /* verilator lint_on CASEINCOMPLETE */
 end

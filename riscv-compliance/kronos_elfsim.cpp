@@ -184,8 +184,11 @@ class Sim {
   void run(uint64_t max_cycles, bool watch_tohost, uint32_t tohost_addr, uint32_t pass_value) {
     for (uint64_t i = 0; i < max_cycles; ++i) {
       tick();
-      if (watch_tohost) {
-        if (top_->data_wr_en && top_->data_addr == tohost_addr && top_->data_wr_data == pass_value) {
+      // Sample tohost on posedge, consistent with mem write logging.
+      // The runner advances in half-cycles (tick toggles clk each call), so
+      // checking only after tick() without gating can miss one-cycle pulses.
+      if (watch_tohost && top_->clk) {
+        if (top_->data_req && top_->data_wr_en && top_->data_addr == tohost_addr && top_->data_wr_data == pass_value) {
           cout << "TOHOST write detected at 0x" << std::hex << tohost_addr
                << " value=0x" << pass_value << std::dec << " at tick " << ticks_ << "\n";
           return;

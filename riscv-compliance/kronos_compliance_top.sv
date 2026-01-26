@@ -46,16 +46,20 @@ assign instr_addr  = instr_addr_c[0];
 assign instr_data  = instr_data_c[0];
 assign instr_req   = instr_req_c[0];
 assign instr_ack   = instr_ack_c[0];
-assign data_addr   = data_addr_c[0];
-assign data_rd_data = data_rd_data_c[0];
-assign data_wr_data = data_wr_data_c[0];
-assign data_mask   = data_mask_c[0];
-assign data_wr_en  = data_wr_en_c[0];
-assign data_req    = data_req_c[0];
-assign data_ack    = data_ack_c[0];
+// For multi-core runs, expose the *arbitrated* memory bus on the data probes so
+// the host runner can observe tohost writes from any core.
+assign data_addr    = mem_addr;
+assign data_rd_data = mem_rd_data;
+assign data_wr_data = mem_wr_data;
+assign data_mask    = mem_mask;
+assign data_wr_en   = mem_wr_en;
+assign data_req     = (grant == GRANT_C0_DATA) ? data_req_c[0] :
+                      (grant == GRANT_C1_DATA) ? data_req_c[1] : 1'b0;
+assign data_ack     = data_req;
 
 for (genvar i = 0; i < NUM_CORES; i++) begin : gen_cores
   kronos_core #(
+    .HARTID(i),
     .STBUF_ENABLE(STBUF_ENABLE),
     .STBUF_ALLOW_LOAD_BYPASS(STBUF_ALLOW_LOAD_BYPASS),
     .STBUF_CONFLICT_STALL(STBUF_CONFLICT_STALL),
@@ -90,17 +94,30 @@ typedef enum logic [2:0] {
 
 grant_e grant, read_grant;
 
-// Priority: data0 > data1 > instr0 > instr1
+// Simple round-robin within {core0, core1} to avoid starvation.
+// Data still has priority over instruction fetch.
+logic last_grant_core;
+
+// Priority group: data > instr
+// Within a group: round-robin between cores
 always_comb begin
   grant = GRANT_NONE;
-  if (data_req_c[0])
-    grant = GRANT_C0_DATA;
-  else if (data_req_c[1])
-    grant = GRANT_C1_DATA;
-  else if (instr_req_c[0])
-    grant = GRANT_C0_INS;
-  else if (instr_req_c[1])
-    grant = GRANT_C1_INS;
+
+  if (data_req_c[0] || data_req_c[1]) begin
+    if (data_req_c[0] && data_req_c[1])
+      grant = last_grant_core ? GRANT_C0_DATA : GRANT_C1_DATA;
+    else if (data_req_c[0])
+      grant = GRANT_C0_DATA;
+    else
+      grant = GRANT_C1_DATA;
+  end else if (instr_req_c[0] || instr_req_c[1]) begin
+    if (instr_req_c[0] && instr_req_c[1])
+      grant = last_grant_core ? GRANT_C0_INS : GRANT_C1_INS;
+    else if (instr_req_c[0])
+      grant = GRANT_C0_INS;
+    else
+      grant = GRANT_C1_INS;
+  end
 end
 
 always_comb begin
@@ -141,6 +158,8 @@ always_ff @(posedge clk or negedge rstz) begin
       data_ack_c[k] <= 1'b0;
     end
     read_grant <= GRANT_NONE;
+
+    last_grant_core <= 1'b0;
   end else begin
     for (k = 0; k < NUM_CORES; k++) begin
       instr_ack_c[k] <= 1'b0;
@@ -153,6 +172,12 @@ always_ff @(posedge clk or negedge rstz) begin
       GRANT_C1_DATA: data_ack_c[1] <= 1'b1;
       default: ;
     endcase
+
+    // Track which core we served last (only meaningful for 2 cores).
+    if (grant == GRANT_C0_INS || grant == GRANT_C0_DATA)
+      last_grant_core <= 1'b0;
+    else if (grant == GRANT_C1_INS || grant == GRANT_C1_DATA)
+      last_grant_core <= 1'b1;
 
     if (mem_en && !mem_wr_en)
       read_grant <= grant;

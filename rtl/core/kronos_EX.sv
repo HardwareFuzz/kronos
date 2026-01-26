@@ -9,6 +9,7 @@ module kronos_EX
   import kronos_types::*;
 #(
   parameter logic [31:0]  BOOT_ADDR = 32'h0,
+  parameter logic [31:0]  HARTID = 32'h0,
   parameter EN_COUNTERS = 1,
   parameter EN_COUNTERS64B = 1,
   parameter STBUF_ENABLE = 0,
@@ -312,6 +313,7 @@ assign csr_vld = instr_vld || state == CSR;
 
 kronos_csr #(
   .BOOT_ADDR     (BOOT_ADDR     ),
+  .HARTID        (HARTID        ),
   .EN_COUNTERS   (EN_COUNTERS   ),
   .EN_COUNTERS64B(EN_COUNTERS64B)
 ) u_csr (
