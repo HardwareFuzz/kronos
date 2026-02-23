@@ -98,26 +98,48 @@ grant_e grant, read_grant;
 // Data still has priority over instruction fetch.
 logic last_grant_core;
 
-// Priority group: data > instr
-// Within a group: round-robin between cores
+// Global fairness (avoid starving instruction fetch when one core streams data).
+// Round-robin across {c0_data, c1_data, c0_ins, c1_ins}.
+logic [1:0] last_req;
+logic req_c0_data, req_c1_data, req_c0_ins, req_c1_ins;
+
+always_comb begin
+  req_c0_data = data_req_c[0];
+  req_c1_data = data_req_c[1];
+  req_c0_ins  = instr_req_c[0];
+  req_c1_ins  = instr_req_c[1];
+end
+
 always_comb begin
   grant = GRANT_NONE;
 
-  if (data_req_c[0] || data_req_c[1]) begin
-    if (data_req_c[0] && data_req_c[1])
-      grant = last_grant_core ? GRANT_C0_DATA : GRANT_C1_DATA;
-    else if (data_req_c[0])
-      grant = GRANT_C0_DATA;
-    else
-      grant = GRANT_C1_DATA;
-  end else if (instr_req_c[0] || instr_req_c[1]) begin
-    if (instr_req_c[0] && instr_req_c[1])
-      grant = last_grant_core ? GRANT_C0_INS : GRANT_C1_INS;
-    else if (instr_req_c[0])
-      grant = GRANT_C0_INS;
-    else
-      grant = GRANT_C1_INS;
-  end
+  // Next after last_req, wrap around.
+  unique case (last_req)
+    2'd0: begin
+      if (req_c1_data) grant = GRANT_C1_DATA;
+      else if (req_c0_ins) grant = GRANT_C0_INS;
+      else if (req_c1_ins) grant = GRANT_C1_INS;
+      else if (req_c0_data) grant = GRANT_C0_DATA;
+    end
+    2'd1: begin
+      if (req_c0_ins) grant = GRANT_C0_INS;
+      else if (req_c1_ins) grant = GRANT_C1_INS;
+      else if (req_c0_data) grant = GRANT_C0_DATA;
+      else if (req_c1_data) grant = GRANT_C1_DATA;
+    end
+    2'd2: begin
+      if (req_c1_ins) grant = GRANT_C1_INS;
+      else if (req_c0_data) grant = GRANT_C0_DATA;
+      else if (req_c1_data) grant = GRANT_C1_DATA;
+      else if (req_c0_ins) grant = GRANT_C0_INS;
+    end
+    default: begin // 2'd3
+      if (req_c0_data) grant = GRANT_C0_DATA;
+      else if (req_c1_data) grant = GRANT_C1_DATA;
+      else if (req_c0_ins) grant = GRANT_C0_INS;
+      else if (req_c1_ins) grant = GRANT_C1_INS;
+    end
+  endcase
 end
 
 always_comb begin
@@ -160,6 +182,7 @@ always_ff @(posedge clk or negedge rstz) begin
     read_grant <= GRANT_NONE;
 
     last_grant_core <= 1'b0;
+    last_req <= 2'd0;
   end else begin
     for (k = 0; k < NUM_CORES; k++) begin
       instr_ack_c[k] <= 1'b0;
@@ -178,6 +201,16 @@ always_ff @(posedge clk or negedge rstz) begin
       last_grant_core <= 1'b0;
     else if (grant == GRANT_C1_INS || grant == GRANT_C1_DATA)
       last_grant_core <= 1'b1;
+
+    if (grant != GRANT_NONE) begin
+      unique case (grant)
+        GRANT_C0_DATA: last_req <= 2'd0;
+        GRANT_C1_DATA: last_req <= 2'd1;
+        GRANT_C0_INS: last_req <= 2'd2;
+        GRANT_C1_INS: last_req <= 2'd3;
+        default: last_req <= last_req;
+      endcase
+    end
 
     if (mem_en && !mem_wr_en)
       read_grant <= grant;
