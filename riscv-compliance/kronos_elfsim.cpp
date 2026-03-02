@@ -14,6 +14,7 @@
 #include <cstring>
 #include <fstream>
 #include <iostream>
+#include <memory>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -83,6 +84,7 @@ class Sim {
         log_reg_(false),
         log_mem_(false),
         log_trap_(false),
+        debug_reg_(false),
         log_out_(&std::cout) {
     top_->clk = 0;
     top_->rstz = 1;
@@ -184,23 +186,31 @@ class Sim {
   void run(uint64_t max_cycles, bool watch_tohost, uint32_t tohost_addr, uint32_t pass_value) {
     for (uint64_t i = 0; i < max_cycles; ++i) {
       tick();
-      // Sample tohost on posedge, consistent with mem write logging.
-      // The runner advances in half-cycles (tick toggles clk each call), so
-      // checking only after tick() without gating can miss one-cycle pulses.
+      // Sample tohost on posedge.
+      // Use architectural store events (per-core) instead of the top-level bus to avoid
+      // coupling to memory arbitration/latency details.
       if (watch_tohost && top_->clk) {
-        if (top_->data_req && top_->data_wr_en && top_->data_addr == tohost_addr && top_->data_wr_data == pass_value) {
-          cout << "TOHOST write detected at 0x" << std::hex << tohost_addr
-               << " value=0x" << pass_value << std::dec << " at tick " << ticks_ << "\n";
-          return;
+        auto& R = *(top_->rootp);
+        for (int h = 0; h < 2; ++h) {
+          if (!R.kronos_compliance_top__DOT__trace_mem_vld[h]) continue;
+          const uint32_t addr = R.kronos_compliance_top__DOT__trace_mem_addr[h];
+          const uint32_t data = R.kronos_compliance_top__DOT__trace_mem_data[h];
+          const uint32_t mask = R.kronos_compliance_top__DOT__trace_mem_mask[h] & 0xF;
+          if (addr == tohost_addr && mask == 0xF && data == pass_value) {
+            cout << "TOHOST write detected at 0x" << std::hex << tohost_addr
+                 << " value=0x" << pass_value << std::dec << " at tick " << ticks_ << "\n";
+            return;
+          }
         }
       }
     }
   }
 
-  void enable_logging(bool log_reg, bool log_mem, bool log_trap, const string& logfile) {
+  void enable_logging(bool log_reg, bool log_mem, bool log_trap, bool debug_reg, const string& logfile) {
     log_reg_ = log_reg;
     log_mem_ = log_mem;
     log_trap_ = log_trap;
+    debug_reg_ = debug_reg;
     if (!logfile.empty()) {
       log_of_ = std::make_unique<std::ofstream>(logfile);
       log_out_ = log_of_.get();
@@ -208,31 +218,55 @@ class Sim {
   }
 
  private:
-  void log_sample_posedge_() {
-    if (!(log_reg_ || log_mem_ || log_trap_)) return;
-    auto& R = *(top_->rootp);
-    uint32_t commit_pc = R.kronos_compliance_top__DOT__commit_pc_mon;
-    uint32_t pc = commit_pc;
-    bool did_commit = false;
-    if (log_mem_ && top_->data_req && top_->data_wr_en) {
-      uint32_t addr = top_->data_addr;
-      uint32_t wdata = top_->data_wr_data;
-      uint32_t mask = top_->data_mask;
-      uint32_t pc_mem = commit_pc;
-      (*log_out_) << "[MEMW] pc=0x" << std::hex << pc_mem
-                  << " addr=0x" << addr
-                  << " data=0x" << wdata
-                  << " mask=0x" << mask << std::dec << "\n";
-      did_commit = true;
-    }
-    if (log_reg_ || log_trap_) {
-      if (!warned_) {
-        (*log_out_) << "[WARN] reg/trap logging disabled in multicore build\n";
-        warned_ = true;
-      }
-    }
-    prev_pc_mon_ = commit_pc;
-  }
+   void log_sample_posedge_() {
+     if (!(log_reg_ || log_mem_ || log_trap_)) return;
+     auto& R = *(top_->rootp);
+
+     // The SV top exposes per-core trace signals via `public_flat` arrays.
+     // We log each event as a single line, keeping the same format expected
+     // by riscv_fuzz_test's Kronos parser.
+     for (int h = 0; h < 2; ++h) {
+        if (log_reg_ && R.kronos_compliance_top__DOT__trace_reg_vld[h]) {
+          const uint32_t pc = R.kronos_compliance_top__DOT__trace_reg_pc[h];
+          const uint32_t rd = R.kronos_compliance_top__DOT__trace_reg_rd[h] & 0x1f;
+          const uint32_t val = R.kronos_compliance_top__DOT__trace_reg_data[h];
+          const uint32_t ir = R.kronos_compliance_top__DOT__trace_reg_ir[h];
+          if (rd != 0) {
+            (*log_out_) << "[REG] pc=0x" << std::hex << pc
+                        << " x" << std::dec << rd
+                        << " <= 0x" << std::hex << val
+                        << " instr=0x" << ir;
+
+            if (debug_reg_) {
+              const uint32_t op1 = R.kronos_compliance_top__DOT__trace_reg_op1[h];
+              const uint32_t op2 = R.kronos_compliance_top__DOT__trace_reg_op2[h];
+              (*log_out_) << " op1=0x" << std::hex << op1
+                          << " op2=0x" << std::hex << op2;
+            }
+
+            (*log_out_) << std::dec << "\n";
+          }
+        }
+
+       if (log_mem_ && R.kronos_compliance_top__DOT__trace_mem_vld[h]) {
+         const uint32_t pc = R.kronos_compliance_top__DOT__trace_mem_pc[h];
+         const uint32_t addr = R.kronos_compliance_top__DOT__trace_mem_addr[h];
+         const uint32_t data = R.kronos_compliance_top__DOT__trace_mem_data[h];
+         const uint32_t mask = R.kronos_compliance_top__DOT__trace_mem_mask[h] & 0xF;
+         (*log_out_) << "[MEMW] pc=0x" << std::hex << pc
+                     << " addr=0x" << addr
+                     << " data=0x" << data
+                     << " mask=0x" << mask << std::dec << "\n";
+       }
+
+       if (log_trap_ && R.kronos_compliance_top__DOT__trace_trap_vld[h]) {
+         const uint32_t pc = R.kronos_compliance_top__DOT__trace_trap_pc[h];
+         const uint32_t cause = R.kronos_compliance_top__DOT__trace_trap_cause[h];
+         (*log_out_) << "[TRAP] pc=0x" << std::hex << pc
+                     << " cause=0x" << cause << std::dec << "\n";
+       }
+     }
+   }
 
   void write_mem_word(uint32_t addr, uint32_t data) {
     // Word addressing; low bits used per generic_spram (addr[2+:NWORDS_WIDTH])
@@ -248,18 +282,15 @@ class Sim {
   bool log_reg_;
   bool log_mem_;
   bool log_trap_;
-  std::ostream* log_out_;
-  std::unique_ptr<std::ofstream> log_of_;
-  uint32_t wb_pc_ = 0;
-  bool wb_pc_valid_ = false;
-  uint32_t prev_pc_mon_ = 0;
-  bool warned_ = false;
+  bool debug_reg_;
+   std::ostream* log_out_;
+   std::unique_ptr<std::ofstream> log_of_;
 };
 
 static void print_usage() {
   cout << "Usage:\n"
-          "  kronos_elfsim <program.elf> [--vcd out.vcd] [--max-cycles N] "
-          "[--mem-kb KB] [--covfile path]\n";
+           "  kronos_elfsim <program.elf> [--vcd out.vcd] [--max-cycles N] "
+           "[--mem-kb KB] [--covfile path] [--debug-reg]\n";
 }
 
 int main(int argc, char **argv) {
@@ -278,6 +309,7 @@ int main(int argc, char **argv) {
   uint32_t tohost_addr = 0;
   uint32_t pass_value = 1;
   bool log_reg=false, log_mem=false, log_trap=false;
+  bool debug_reg=false;
   string log_file;
   string cov_file = "logs/coverage.dat";
   bool cov_file_cli = false;  // track if user passed --covfile
@@ -309,6 +341,8 @@ int main(int argc, char **argv) {
       }
     } else if (a == "--log-file" && (i + 1) < argc) {
       log_file = argv[++i];
+    } else if (a == "--debug-reg") {
+      debug_reg = true;
     } else if (a == "--covfile" && (i + 1) < argc) {
       cov_file = argv[++i];
       cov_file_cli = true;
@@ -346,7 +380,7 @@ int main(int argc, char **argv) {
     Sim sim(mem_kb);
     sim.start_trace(vcd);
     sim.reset();
-    sim.enable_logging(log_reg, log_mem, log_trap, log_file);
+    sim.enable_logging(log_reg, log_mem, log_trap, debug_reg, log_file);
     sim.load_elf(elf);
     sim.run(max_cycles, watch_tohost, tohost_addr, pass_value);
     sim.stop_trace();

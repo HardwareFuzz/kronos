@@ -24,11 +24,13 @@ module kronos_compliance_top #(
   output logic        data_ack
 );
 
+// Single-port memory command (synchronous read: response next cycle).
 logic [31:0] mem_addr;
 logic [31:0] mem_wr_data;
 logic [31:0] mem_rd_data;
-logic mem_en, mem_wr_en;
-logic [3:0] mem_mask;
+logic        mem_en;
+logic        mem_wr_en;
+logic [3:0]  mem_mask;
 
 logic [31:0] instr_addr_c [NUM_CORES];
 logic [31:0] instr_data_c [NUM_CORES];
@@ -46,16 +48,18 @@ assign instr_addr  = instr_addr_c[0];
 assign instr_data  = instr_data_c[0];
 assign instr_req   = instr_req_c[0];
 assign instr_ack   = instr_ack_c[0];
-// For multi-core runs, expose the *arbitrated* memory bus on the data probes so
-// the host runner can observe tohost writes from any core.
+// For multi-core runs, expose the arbitrated memory bus on the data probes.
+// Note: the bus command (addr/data/mask/wr_en) reflects the *current* grant,
+// while the ack reflects the *previous* cycle's grant (synchronous read).
 assign data_addr    = mem_addr;
 assign data_rd_data = mem_rd_data;
 assign data_wr_data = mem_wr_data;
 assign data_mask    = mem_mask;
 assign data_wr_en   = mem_wr_en;
-assign data_req     = (grant == GRANT_C0_DATA) ? data_req_c[0] :
-                      (grant == GRANT_C1_DATA) ? data_req_c[1] : 1'b0;
-assign data_ack     = data_req;
+assign data_req     = (grant == GRANT_C0_DATA) ? 1'b1 :
+                      (grant == GRANT_C1_DATA) ? 1'b1 : 1'b0;
+assign data_ack     = (resp_grant_q == GRANT_C0_DATA) ? 1'b1 :
+                      (resp_grant_q == GRANT_C1_DATA) ? 1'b1 : 1'b0;
 
 for (genvar i = 0; i < NUM_CORES; i++) begin : gen_cores
   kronos_core #(
@@ -84,6 +88,51 @@ for (genvar i = 0; i < NUM_CORES; i++) begin : gen_cores
   );
 end
 
+// ------------------------------------------------------------
+// Trace monitors (per core)
+// Exposed via `public_flat` so the C++ runner can log dual-hart traces.
+logic [31:0] trace_reg_pc   [NUM_CORES] /* verilator public_flat */;
+logic        trace_reg_vld  [NUM_CORES] /* verilator public_flat */;
+logic [4:0]  trace_reg_rd   [NUM_CORES] /* verilator public_flat */;
+logic [31:0] trace_reg_data [NUM_CORES] /* verilator public_flat */;
+logic [31:0] trace_reg_ir   [NUM_CORES] /* verilator public_flat */;
+logic [31:0] trace_reg_op1  [NUM_CORES] /* verilator public_flat */;
+logic [31:0] trace_reg_op2  [NUM_CORES] /* verilator public_flat */;
+
+logic [31:0] trace_mem_pc   [NUM_CORES] /* verilator public_flat */;
+logic        trace_mem_vld  [NUM_CORES] /* verilator public_flat */;
+logic [31:0] trace_mem_addr [NUM_CORES] /* verilator public_flat */;
+logic [31:0] trace_mem_data [NUM_CORES] /* verilator public_flat */;
+logic [3:0]  trace_mem_mask [NUM_CORES] /* verilator public_flat */;
+
+logic [31:0] trace_trap_pc    [NUM_CORES] /* verilator public_flat */;
+logic        trace_trap_vld   [NUM_CORES] /* verilator public_flat */;
+logic [31:0] trace_trap_cause [NUM_CORES] /* verilator public_flat */;
+
+for (genvar t = 0; t < NUM_CORES; t++) begin : gen_trace
+  // Register writeback
+  assign trace_reg_pc[t] = gen_cores[t].u_core.u_ex.log_reg_pc;
+  assign trace_reg_vld[t] = gen_cores[t].u_core.u_ex.log_reg_pc_vld;
+  // Use EX-stage writeback signals so {pc,rd,data} stay aligned.
+  assign trace_reg_rd[t] = gen_cores[t].u_core.u_ex.regwr_sel;
+  assign trace_reg_data[t] = gen_cores[t].u_core.u_ex.regwr_data;
+  assign trace_reg_ir[t] = gen_cores[t].u_core.u_ex.log_reg_ir;
+  assign trace_reg_op1[t] = gen_cores[t].u_core.u_ex.log_reg_op1;
+  assign trace_reg_op2[t] = gen_cores[t].u_core.u_ex.log_reg_op2;
+
+  // Architectural store events
+  assign trace_mem_pc[t] = gen_cores[t].u_core.u_ex.log_mem_pc;
+  assign trace_mem_vld[t] = gen_cores[t].u_core.u_ex.log_mem_pc_vld;
+  assign trace_mem_addr[t] = gen_cores[t].u_core.u_ex.log_mem_addr;
+  assign trace_mem_data[t] = gen_cores[t].u_core.u_ex.log_mem_data;
+  assign trace_mem_mask[t] = gen_cores[t].u_core.u_ex.log_mem_mask;
+
+  // Trap/exception events
+  assign trace_trap_pc[t] = gen_cores[t].u_core.u_ex.log_trap_pc;
+  assign trace_trap_vld[t] = gen_cores[t].u_core.u_ex.log_trap_pc_vld;
+  assign trace_trap_cause[t] = gen_cores[t].u_core.u_ex.trap_cause;
+end
+
 typedef enum logic [2:0] {
   GRANT_NONE    = 3'd0,
   GRANT_C0_DATA = 3'd1,
@@ -92,11 +141,8 @@ typedef enum logic [2:0] {
   GRANT_C1_INS  = 3'd4
 } grant_e;
 
-grant_e grant, read_grant;
-
-// Simple round-robin within {core0, core1} to avoid starvation.
-// Data still has priority over instruction fetch.
-logic last_grant_core;
+grant_e grant;
+grant_e resp_grant_q;
 
 // Global fairness (avoid starving instruction fetch when one core streams data).
 // Round-robin across {c0_data, c1_data, c0_ins, c1_ins}.
@@ -173,34 +219,13 @@ always_comb begin
 end
 
 always_ff @(posedge clk or negedge rstz) begin
-  integer k;
   if (!rstz) begin
-    for (k = 0; k < NUM_CORES; k++) begin
-      instr_ack_c[k] <= 1'b0;
-      data_ack_c[k] <= 1'b0;
-    end
-    read_grant <= GRANT_NONE;
-
-    last_grant_core <= 1'b0;
+    resp_grant_q <= GRANT_NONE;
     last_req <= 2'd0;
   end else begin
-    for (k = 0; k < NUM_CORES; k++) begin
-      instr_ack_c[k] <= 1'b0;
-      data_ack_c[k] <= 1'b0;
-    end
-    case (grant)
-      GRANT_C0_INS: instr_ack_c[0] <= 1'b1;
-      GRANT_C1_INS: instr_ack_c[1] <= 1'b1;
-      GRANT_C0_DATA: data_ack_c[0] <= 1'b1;
-      GRANT_C1_DATA: data_ack_c[1] <= 1'b1;
-      default: ;
-    endcase
-
-    // Track which core we served last (only meaningful for 2 cores).
-    if (grant == GRANT_C0_INS || grant == GRANT_C0_DATA)
-      last_grant_core <= 1'b0;
-    else if (grant == GRANT_C1_INS || grant == GRANT_C1_DATA)
-      last_grant_core <= 1'b1;
+    // Latch the grant used for the memory command in the *previous* cycle.
+    // This aligns with the synchronous `generic_spram` read data output.
+    resp_grant_q <= grant;
 
     if (grant != GRANT_NONE) begin
       unique case (grant)
@@ -211,11 +236,6 @@ always_ff @(posedge clk or negedge rstz) begin
         default: last_req <= last_req;
       endcase
     end
-
-    if (mem_en && !mem_wr_en)
-      read_grant <= grant;
-    else
-      read_grant <= GRANT_NONE;
   end
 end
 
@@ -224,12 +244,26 @@ always_comb begin
   for (j = 0; j < NUM_CORES; j++) begin
     instr_data_c[j] = 32'b0;
     data_rd_data_c[j] = 32'b0;
+    instr_ack_c[j] = 1'b0;
+    data_ack_c[j] = 1'b0;
   end
-  case (read_grant)
-    GRANT_C0_INS: instr_data_c[0] = mem_rd_data;
-    GRANT_C1_INS: instr_data_c[1] = mem_rd_data;
-    GRANT_C0_DATA: data_rd_data_c[0] = mem_rd_data;
-    GRANT_C1_DATA: data_rd_data_c[1] = mem_rd_data;
+  case (resp_grant_q)
+    GRANT_C0_INS: begin
+      instr_ack_c[0] = 1'b1;
+      instr_data_c[0] = mem_rd_data;
+    end
+    GRANT_C1_INS: begin
+      instr_ack_c[1] = 1'b1;
+      instr_data_c[1] = mem_rd_data;
+    end
+    GRANT_C0_DATA: begin
+      data_ack_c[0] = 1'b1;
+      data_rd_data_c[0] = mem_rd_data;
+    end
+    GRANT_C1_DATA: begin
+      data_ack_c[1] = 1'b1;
+      data_rd_data_c[1] = mem_rd_data;
+    end
     default: ;
   endcase
 end
