@@ -32,7 +32,9 @@ localparam NWORDS = 256 * KB;
 localparam NWORDS_WIDTH = $clog2(NWORDS);
 
 // instance (256*KB)x32 memory - which will be inferred as EBR with appropriate muxing
-logic [31:0] MEM [NWORDS];
+// Expose the internal memory to Verilator C++ for preloading/inspection
+// Note: public_flat_rw enables flattened read/write access from C++.
+logic [31:0] MEM [NWORDS] /* verilator public_flat_rw */;
 
 // There are 256*KB words
 logic [NWORDS_WIDTH-1:0] word_addr;

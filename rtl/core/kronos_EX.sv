@@ -54,14 +54,24 @@ logic csr_vld,csr_rdy;
 logic [31:0] csr_data;
 logic regwr_csr;
 logic instret;
-logic core_interrupt;
+logic core_interrupt /* verilator public_flat */;
 logic [3:0] core_interrupt_cause;
 
-logic exception;
+logic exception /* verilator public_flat */;
 
 logic activate_trap, return_trap;
-logic [31:0] trap_cause, trap_handle, trap_value;
-logic trap_jump;
+logic [31:0] trap_cause /* verilator public_flat */, trap_handle, trap_value;
+logic trap_jump /* verilator public_flat */;
+
+logic instr_accept;
+logic [31:0] exec_pc;
+logic [31:0] log_reg_pc /* verilator public_flat */;
+logic        log_reg_pc_vld /* verilator public_flat */;
+logic [31:0] log_trap_pc /* verilator public_flat */;
+logic        log_trap_pc_vld /* verilator public_flat */;
+logic        trap_event_q;
+logic        trap_event_now;
+logic        trap_event_pulse;
 
 enum logic [2:0] {
   STEADY,
@@ -122,12 +132,50 @@ end
 
 // Decoded instruction valid
 assign instr_vld = decode_vld && state == STEADY && ~exception && ~core_interrupt;
+assign instr_accept = decode_vld && decode_rdy;
 
 // Basic instructions
 assign basic_rdy = instr_vld && decode.basic;
 
 // Next instructions
 assign decode_rdy = |{basic_rdy, lsu_rdy, csr_rdy};
+
+always_ff @(posedge clk or negedge rstz) begin
+  if (~rstz) exec_pc <= '0;
+  else if (instr_accept) exec_pc <= decode.pc;
+end
+
+always_ff @(posedge clk or negedge rstz) begin
+  if (~rstz) begin
+    log_reg_pc <= '0;
+    log_reg_pc_vld <= 1'b0;
+  end
+  else begin
+    log_reg_pc_vld <= regwr_en;
+    if (regwr_en) log_reg_pc <= exec_pc;
+  end
+end
+
+
+assign trap_event_now = exception || trap_jump || core_interrupt;
+
+always_ff @(posedge clk or negedge rstz) begin
+  if (~rstz) trap_event_q <= 1'b0;
+  else trap_event_q <= trap_event_now;
+end
+
+assign trap_event_pulse = trap_event_now && ~trap_event_q;
+
+always_ff @(posedge clk or negedge rstz) begin
+  if (~rstz) begin
+    log_trap_pc <= '0;
+    log_trap_pc_vld <= 1'b0;
+  end
+  else begin
+    log_trap_pc_vld <= trap_event_pulse;
+    if (trap_event_pulse) log_trap_pc <= exec_pc;
+  end
+end
 
 // ============================================================
 // ALU

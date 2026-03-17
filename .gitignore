@@ -1,4 +1,7 @@
 build
+build_cov
+build_cov_light
 logs
+build_result/
 *.log
 *.pyc

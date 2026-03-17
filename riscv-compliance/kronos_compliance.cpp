@@ -10,6 +10,7 @@
 #include <verilated_vcd_c.h>
 
 #include "kronos_compliance_top.h"
+#include "kronos_compliance_top___024root.h"
 
 using namespace std;
 
@@ -34,7 +35,7 @@ class Sim {
       
       i = 0;
       while(FILE.read((char*)&word, 4)) {
-        top->kronos_compliance_top__DOT__u_mem__DOT__MEM[i] = word;
+        top->rootp->kronos_compliance_top__DOT__u_mem__DOT__MEM[i] = word;
         i++;
       }
       FILE.close();
@@ -124,7 +125,7 @@ class Sim {
       ofstream FILE(resfile.c_str());
 
       for (int i=begin_addr; i<end_addr; i++) {
-        data = top->kronos_compliance_top__DOT__u_mem__DOT__MEM[i];
+        data = top->rootp->kronos_compliance_top__DOT__u_mem__DOT__MEM[i];
         sprintf(txt, "%08x\n", data);
         FILE << txt;
       }

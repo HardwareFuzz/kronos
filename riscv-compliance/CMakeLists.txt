@@ -45,3 +45,23 @@ add_executable(kronos_compliance
 target_link_libraries(kronos_compliance
   verilated-kronos_compliance_top
 )
+
+# -------------------------------------------------------------
+# Generic ELF simulation runner (Verilator + C++)
+#   Accepts an ELF path and runs the verilated core.
+#   Links against the same kronos_compliance_top (with generic_spram).
+add_executable(kronos_elfsim
+  kronos_elfsim.cpp
+)
+
+target_link_libraries(kronos_elfsim
+  verilated-kronos_compliance_top
+)
+
+# Note: `VERILATOR_COVERAGE` is not a standard/guaranteed CMake flag and may
+# be unset even when we invoke Verilator with coverage options. Use the
+# configured coverage mode to decide whether to compile in the VM_COVERAGE
+# runner hooks that write `coverage.dat`.
+if (NOT VERILATOR_COVERAGE_MODE STREQUAL "none")
+  target_compile_definitions(kronos_elfsim PRIVATE VM_COVERAGE=1)
+endif()

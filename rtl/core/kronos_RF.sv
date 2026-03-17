@@ -145,7 +145,7 @@ assign is_regrd_rs2_en = OP == INSTR_OP
 // ============================================================
 // Integer Registers
 
-logic [31:0] REG [32] /* synthesis syn_ramstyle = "no_rw_check" */;
+logic [31:0] REG [32] /* verilator public_flat */ /* synthesis syn_ramstyle = "no_rw_check" */;
 
 // REG Read
 always_ff @(posedge clk or negedge rstz) begin
