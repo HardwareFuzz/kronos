@@ -24,11 +24,13 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: ./build.sh [--isa ISA] [--coverage|--coverage-light|--no-coverage] [--cores N] [--clean] [--help]
+Usage: ./build.sh [--isa ISA] [--cores N] [--out-dir DIR] [--coverage|--coverage-light|--no-coverage] [--clean] [--help]
 
 Build the Verilator ELF simulator (kronos).
   --isa ISA            ISA tag used for output naming (default: rv32). Kronos is RV32-only.
   --cores N            Set core count tag used for output naming (default: 1)
+  --out-dir DIR        Output directory for the final binary (default: ./build_result)
+                       You can also set CX_OUT_DIR (shared across repos) or OUT_DIR.
   --coverage           Build full coverage-enabled binary
   --coverage-light     Build light coverage binary (line/user coverage only)
   --no-coverage        Build the standard binary (default)
@@ -36,7 +38,7 @@ Build the Verilator ELF simulator (kronos).
   --help               Show this message
 
 Output binary:
-  build_result/kronos_<isa>_<N>c[_cov|_cov_light]
+  <out-dir>/kronos_<isa>_<N>c[_cov|_cov_light]
 
 At runtime, pass --covfile <path> to the simulator to choose the coverage
 .dat output path (coverage builds only). Default is logs/coverage.dat; if
@@ -46,11 +48,11 @@ EOF
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BIN_NAME="kronos_elfsim"
-RESULT_DIR="${ROOT_DIR}/build_result"
 ISA="${ISA:-rv32}"
 COVERAGE_MODE="${COVERAGE_MODE:-none}" # none|full|light
 CORES="${CORES:-1}"
 CLEAN=0
+OUT_DIR_OPT=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -79,12 +81,22 @@ while [[ $# -gt 0 ]]; do
       continue
       ;;
     --cores=*) CORES="${1#*=}" ;;
+    --out-dir)
+      [[ $# -ge 2 ]] || { echo "ERROR: --out-dir requires a value" >&2; usage; exit 1; }
+      OUT_DIR_OPT="$2"
+      shift 2
+      continue
+      ;;
+    --out-dir=*) OUT_DIR_OPT="${1#*=}" ;;
     --clean) CLEAN=1 ;;
     --help|-h) usage; exit 0 ;;
     *) echo "Unknown option: $1" >&2; usage; exit 1 ;;
   esac
   shift || true
 done
+
+OUT_DIR_DEFAULT="${ROOT_DIR}/build_result"
+OUT_DIR="${OUT_DIR_OPT:-${CX_OUT_DIR:-${OUT_DIR:-${OUT_DIR_DEFAULT}}}}"
 
 if [[ "$ISA" != rv32* ]]; then
   echo "ERROR: Kronos is RV32-only; refusing ISA '$ISA'" >&2
@@ -124,7 +136,7 @@ OUT_NAME="kronos_${ISA}_${CORES}c${COV_SUFFIX}"
 
 if (( CLEAN )); then
   rm -rf "${BUILD_DIR}"
-  rm -f "${RESULT_DIR}/${OUT_NAME}"
+  rm -f "${OUT_DIR}/${OUT_NAME}"
 fi
 
 # Create a local RISCV toolchain shim if only riscv64 toolchain exists
@@ -145,12 +157,12 @@ mkdir -p "${BUILD_DIR}"
 cmake -S "${ROOT_DIR}" -B "${BUILD_DIR}" -DCMAKE_BUILD_TYPE=Release -DVERILATOR_COVERAGE_MODE="${COVERAGE_MODE}"
 cmake --build "${BUILD_DIR}" --target ${BIN_NAME} -j
 
-mkdir -p "${RESULT_DIR}"
-cp -f "${BUILD_DIR}/output/bin/${BIN_NAME}" "${RESULT_DIR}/${OUT_NAME}"
+mkdir -p "${OUT_DIR}"
+cp -f "${BUILD_DIR}/output/bin/${BIN_NAME}" "${OUT_DIR}/${OUT_NAME}"
 
 if [[ "$COVERAGE_MODE" == "full" || "$COVERAGE_MODE" == "light" ]]; then
-  echo "Built coverage binary: ${RESULT_DIR}/${OUT_NAME}"
+  echo "Built coverage binary: ${OUT_DIR}/${OUT_NAME}"
   echo "Run with +covfile=<path> to choose the coverage output .dat file (default: logs/coverage.dat)."
 else
-  echo "Built ${RESULT_DIR}/${OUT_NAME}"
+  echo "Built ${OUT_DIR}/${OUT_NAME}"
 fi
