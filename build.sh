@@ -28,7 +28,7 @@ Usage: ./build.sh [--isa ISA] [--cores N] [--out-dir DIR] [--coverage|--coverage
 
 Build the Verilator ELF simulator (kronos).
   --isa ISA            ISA tag used for output naming (default: rv32). Kronos is RV32-only.
-  --cores N            Set core count tag used for output naming (default: 1)
+  --cores N            Core count (default: 2). This branch supports N=2 only.
   --out-dir DIR        Output directory for the final binary (default: ./build_result)
                        You can also set CX_OUT_DIR (shared across repos) or OUT_DIR.
   --coverage           Build full coverage-enabled binary
@@ -50,7 +50,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BIN_NAME="kronos_elfsim"
 ISA="${ISA:-rv32}"
 COVERAGE_MODE="${COVERAGE_MODE:-none}" # none|full|light
-CORES="${CORES:-1}"
+CORES="${CORES:-2}"
 CLEAN=0
 OUT_DIR_OPT=""
 
@@ -108,8 +108,8 @@ if ! [[ "$CORES" =~ ^[0-9]+$ ]] || (( CORES < 1 )); then
   exit 1
 fi
 
-if (( CORES != 1 )); then
-  echo "ERROR: log branch is single-core only; use --cores 1 (got '$CORES')" >&2
+if (( CORES != 2 )); then
+  echo "ERROR: This branch supports --cores 2 only (got '$CORES')" >&2
   exit 1
 fi
 
@@ -139,6 +139,8 @@ if (( CLEAN )); then
   rm -f "${OUT_DIR}/${OUT_NAME}"
 fi
 
+VERILATOR_ARGS="-GNUM_CORES=${CORES}"
+
 # Create a local RISCV toolchain shim if only riscv64 toolchain exists
 TOOLSHIM="${BUILD_DIR}/toolshim"
 mkdir -p "${TOOLSHIM}/bin"
@@ -154,7 +156,9 @@ else
 fi
 
 mkdir -p "${BUILD_DIR}"
-cmake -S "${ROOT_DIR}" -B "${BUILD_DIR}" -DCMAKE_BUILD_TYPE=Release -DVERILATOR_COVERAGE_MODE="${COVERAGE_MODE}"
+cmake -S "${ROOT_DIR}" -B "${BUILD_DIR}" -DCMAKE_BUILD_TYPE=Release \
+  -DVERILATOR_COVERAGE_MODE="${COVERAGE_MODE}" \
+  -DKRONOS_VERILATOR_ARGS="${VERILATOR_ARGS}"
 cmake --build "${BUILD_DIR}" --target ${BIN_NAME} -j
 
 mkdir -p "${OUT_DIR}"

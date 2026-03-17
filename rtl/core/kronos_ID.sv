@@ -54,6 +54,7 @@ logic regwr_alu;
 logic branch;
 logic csr;
 logic [1:0] sysop;
+logic is_fence;
 logic is_fencei;
 
 logic illegal;
@@ -118,6 +119,7 @@ assign rs2_data = rs2_forward ? regwr_data : regrd_rs2;
 // Operation Decoder
 always_comb begin
   instr_valid = 1'b0;
+  is_fence = 1'b0;
   is_fencei = 1'b0;
   sysop = 2'b0;
   csr = 1'b0;
@@ -289,6 +291,7 @@ always_comb begin
       case(funct3)
         3'b000: begin // FENCE
           // This is a NOP
+          is_fence = 1'b1;
           instr_valid = 1'b1;
         end
         3'b001: begin // FENCE.I
@@ -428,6 +431,8 @@ always_ff @(posedge clk or negedge rstz) begin
       decode.csr <= csr;
       decode.system <= OP == INSTR_SYS && ~csr;
       decode.sysop <= sysop;
+      decode.fence <= is_fence;
+      decode.fencei <= is_fencei;
 
       decode.illegal <= illegal;
       decode.misaligned_jmp <= misaligned_jmp;

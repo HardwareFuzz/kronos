@@ -9,6 +9,7 @@ module kronos_EX
   import kronos_types::*;
 #(
   parameter logic [31:0]  BOOT_ADDR = 32'h0,
+  parameter logic [31:0]  HARTID = 32'h0,
   parameter EN_COUNTERS = 1,
   parameter EN_COUNTERS64B = 1
 )(
@@ -63,15 +64,19 @@ logic activate_trap, return_trap;
 logic [31:0] trap_cause /* verilator public_flat */, trap_handle, trap_value;
 logic trap_jump /* verilator public_flat */;
 
-logic instr_accept;
-logic [31:0] exec_pc;
-logic [31:0] log_reg_pc /* verilator public_flat */;
-logic        log_reg_pc_vld /* verilator public_flat */;
-logic [31:0] log_trap_pc /* verilator public_flat */;
-logic        log_trap_pc_vld /* verilator public_flat */;
-logic        trap_event_q;
-logic        trap_event_now;
-logic        trap_event_pulse;
+  logic instr_accept;
+  logic [31:0] log_reg_pc /* verilator public_flat */;
+  logic        log_reg_pc_vld /* verilator public_flat */;
+  logic [31:0] log_reg_ir /* verilator public_flat */;
+  logic [31:0] log_reg_op1 /* verilator public_flat */;
+  logic [31:0] log_reg_op2 /* verilator public_flat */;
+  logic [31:0] log_mem_pc /* verilator public_flat */;
+  logic        log_mem_pc_vld /* verilator public_flat */;
+  logic [31:0] log_mem_addr /* verilator public_flat */;
+  logic [31:0] log_mem_data /* verilator public_flat */;
+  logic [3:0]  log_mem_mask /* verilator public_flat */;
+  logic [31:0] log_trap_pc /* verilator public_flat */;
+  logic        log_trap_pc_vld /* verilator public_flat */;
 
 enum logic [2:0] {
   STEADY,
@@ -110,7 +115,12 @@ always_comb begin
           WFI   : next_state = WFINTR;
         endcase
       end
-      else if (decode.load || decode.store) next_state = LSU;
+      else if (decode.load || decode.store) begin
+        // If the LSU can complete immediately, stay in STEADY to avoid
+        // getting stuck in LSU state.
+        if (lsu_rdy) next_state = STEADY;
+        else next_state = LSU;
+      end
       else if (decode.csr) next_state = CSR;
     end
 
@@ -141,39 +151,80 @@ assign basic_rdy = instr_vld && decode.basic;
 assign decode_rdy = |{basic_rdy, lsu_rdy, csr_rdy};
 
 always_ff @(posedge clk or negedge rstz) begin
-  if (~rstz) exec_pc <= '0;
-  else if (instr_accept) exec_pc <= decode.pc;
-end
-
-always_ff @(posedge clk or negedge rstz) begin
   if (~rstz) begin
     log_reg_pc <= '0;
     log_reg_pc_vld <= 1'b0;
+    log_reg_ir <= '0;
+    log_reg_op1 <= '0;
+    log_reg_op2 <= '0;
   end
   else begin
-    log_reg_pc_vld <= regwr_en;
-    if (regwr_en) log_reg_pc <= exec_pc;
+    // Align the logged PC with the architectural writeback event.
+    // Note: regwr_en is registered, so using it directly would delay the log by 1 cycle.
+    logic regwr_pulse;
+    regwr_pulse = (instr_vld && decode.regwr_alu)
+              || (lsu_rdy && regwr_lsu)
+              || (csr_rdy && regwr_csr);
+
+    log_reg_pc_vld <= regwr_pulse;
+    if (regwr_pulse) begin
+      log_reg_pc <= decode.pc;
+      log_reg_ir <= decode.ir;
+      log_reg_op1 <= decode.op1;
+      log_reg_op2 <= decode.op2;
+    end
+  end
+end
+
+// Log architectural store events (PC/address/data/mask) when the store instruction retires.
+always_ff @(posedge clk or negedge rstz) begin
+  if (~rstz) begin
+    log_mem_pc <= '0;
+    log_mem_pc_vld <= 1'b0;
+    log_mem_addr <= '0;
+    log_mem_data <= '0;
+    log_mem_mask <= '0;
+  end
+  else begin
+    log_mem_pc_vld <= instr_accept && decode.store;
+    if (instr_accept && decode.store) begin
+      log_mem_pc <= decode.pc;
+      log_mem_addr <= {decode.addr[31:2], 2'b0};
+      log_mem_data <= decode.op2;
+      log_mem_mask <= decode.mask;
+    end
   end
 end
 
 
-assign trap_event_now = exception || trap_jump || core_interrupt;
-
-always_ff @(posedge clk or negedge rstz) begin
-  if (~rstz) trap_event_q <= 1'b0;
-  else trap_event_q <= trap_event_now;
-end
-
-assign trap_event_pulse = trap_event_now && ~trap_event_q;
-
+// Log trap events when the trap cause is latched.
+//
+// Note: System/trap instructions (ECALL/EBREAK/WFI) and exceptions do not go through the
+// normal decode_rdy/instr_accept path, so `exec_pc` is not reliable here. Use `decode.pc`.
 always_ff @(posedge clk or negedge rstz) begin
   if (~rstz) begin
     log_trap_pc <= '0;
     log_trap_pc_vld <= 1'b0;
   end
   else begin
-    log_trap_pc_vld <= trap_event_pulse;
-    if (trap_event_pulse) log_trap_pc <= exec_pc;
+    log_trap_pc_vld <= 1'b0;
+
+    if (decode_vld && state == STEADY) begin
+      if (core_interrupt
+          || decode.illegal
+          || (decode.misaligned_jmp && instr_jump)
+          || (decode.misaligned_ldst && decode.load)
+          || (decode.misaligned_ldst && decode.store)
+          || (decode.system && (decode.sysop == ECALL))
+          || (decode.system && (decode.sysop == EBREAK))) begin
+        log_trap_pc_vld <= 1'b1;
+        log_trap_pc <= decode.pc;
+      end
+    end
+    else if (state == WFINTR && core_interrupt) begin
+      log_trap_pc_vld <= 1'b1;
+      log_trap_pc <= decode.pc;
+    end
   end
 end
 
@@ -293,6 +344,7 @@ assign csr_vld = instr_vld || state == CSR;
 
 kronos_csr #(
   .BOOT_ADDR     (BOOT_ADDR     ),
+  .HARTID        (HARTID        ),
   .EN_COUNTERS   (EN_COUNTERS   ),
   .EN_COUNTERS64B(EN_COUNTERS64B)
 ) u_csr (

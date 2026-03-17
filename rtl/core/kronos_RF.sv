@@ -30,7 +30,7 @@ module kronos_RF
   input  logic        regwr_en
 );
 
-logic reg_vld, instr_rdy;
+logic reg_vld;
 logic [4:0] reg_rs1, reg_rs2;
 
 logic [31:0] IR;
@@ -153,7 +153,7 @@ always_ff @(posedge clk or negedge rstz) begin
     reg_vld <= 1'b0;
   end
   else begin
-    if (instr_vld && instr_rdy) begin
+    if (instr_vld) begin
       reg_vld <= 1'b1;
 
       // Load next operands for instruction,
@@ -186,8 +186,6 @@ always_ff @(posedge clk or negedge rstz) begin
     end
   end
 end
-
-assign instr_rdy = ~reg_vld | fetch_rdy;
 
 // REG Write
 always_ff @(posedge clk) begin

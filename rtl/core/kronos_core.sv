@@ -10,6 +10,7 @@ module kronos_core
   import kronos_types::*;
 #(
   parameter logic [31:0]  BOOT_ADDR = 32'h0,
+  parameter logic [31:0]  HARTID = 32'h0,
   parameter FAST_BRANCH = 1,
   parameter EN_COUNTERS = 1,
   parameter EN_COUNTERS64B = 1,
@@ -118,8 +119,9 @@ kronos_ID #(
 // Execute
 // ============================================================
 kronos_EX #(
-  .BOOT_ADDR     (BOOT_ADDR),
-  .EN_COUNTERS   (EN_COUNTERS),
+  .BOOT_ADDR     (BOOT_ADDR     ),
+  .HARTID        (HARTID        ),
+  .EN_COUNTERS   (EN_COUNTERS   ),
   .EN_COUNTERS64B(EN_COUNTERS64B)
 ) u_ex (
   .clk               (clk               ),

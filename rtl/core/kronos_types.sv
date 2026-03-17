@@ -31,6 +31,8 @@ typedef struct packed {
     logic        csr;
     logic        system;
     logic [1:0]  sysop;
+    logic        fence;
+    logic        fencei;
     logic        illegal;
     logic        misaligned_jmp;
     logic        misaligned_ldst;
@@ -125,6 +127,9 @@ parameter logic [1:0]  CSR_RC       = 2'b11;
 parameter logic [11:0] MSTATUS      = 12'h300;
 parameter logic [11:0] MIE          = 12'h304;
 parameter logic [11:0] MTVEC        = 12'h305;
+
+// Machine Hart ID (read-only)
+parameter logic [11:0] MHARTID      = 12'hF14;
 
 parameter logic [11:0] MSCRATCH     = 12'h340;
 parameter logic [11:0] MEPC         = 12'h341;

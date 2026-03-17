@@ -9,10 +9,12 @@ import kronos_types::*;
 import rv32_assembler::*;
 
 logic clk;
+logic rstz;
 
 pipeIDEX_t decode;
 logic lsu_vld;
 logic lsu_rdy;
+logic stbuf_empty;
 logic [31:0] load_data;
 logic regwr_lsu;
 logic [31:0] data_addr;
@@ -24,9 +26,12 @@ logic data_req;
 logic data_ack;
 
 kronos_lsu u_dut (
+  .clk         (clk         ),
+  .rstz        (rstz        ),
   .decode      (decode      ),
   .lsu_vld     (lsu_vld     ),
   .lsu_rdy     (lsu_rdy     ),
+  .stbuf_empty (stbuf_empty ),
   .load_data   (load_data   ),
   .regwr_lsu   (regwr_lsu   ),
   .data_addr   (data_addr   ),
@@ -74,6 +79,7 @@ logic [31:0] store_addr, expected_store_data, got_store_data;
   logic [31:0] data;
 
   clk = 0;
+  rstz = 0;
   lsu_vld = 0;
 
   for(int i=0; i<256; i++)
@@ -83,6 +89,8 @@ logic [31:0] store_addr, expected_store_data, got_store_data;
     forever #1ns clk = ~clk;
   join_none
 
+  ##2;
+  rstz = 1;
   ##8;
   end
 

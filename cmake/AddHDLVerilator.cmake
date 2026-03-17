@@ -99,6 +99,11 @@ function(verilate_hdl)
     set(coverage_flag --coverage-line --coverage-user --coverage-max-width 0)
   endif()
 
+  set(extra_verilator_args)
+  if (DEFINED KRONOS_VERILATOR_ARGS AND NOT KRONOS_VERILATOR_ARGS STREQUAL "")
+    separate_arguments(extra_verilator_args UNIX_COMMAND "${KRONOS_VERILATOR_ARGS}")
+  endif()
+
   # Verilate HDL and compile it
   add_custom_command(
     OUTPUT
@@ -110,6 +115,7 @@ function(verilate_hdl)
       --prefix ${ARG_NAME}
       --top-module ${ARG_NAME}
       ${includes}
+      ${extra_verilator_args}
       -sv ${sources}
       2>&1 | tee "${ARG_NAME}.verilate.log"
     COMMAND
