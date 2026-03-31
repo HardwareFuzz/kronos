@@ -90,16 +90,21 @@ logic [31:0] trace_reg_data [NUM_CORES] /* verilator public_flat */;
 logic [31:0] trace_reg_ir   [NUM_CORES] /* verilator public_flat */;
 logic [31:0] trace_reg_op1  [NUM_CORES] /* verilator public_flat */;
 logic [31:0] trace_reg_op2  [NUM_CORES] /* verilator public_flat */;
+logic [63:0] trace_reg_start_cycle [NUM_CORES] /* verilator public_flat */;
 
 logic [31:0] trace_mem_pc   [NUM_CORES] /* verilator public_flat */;
 logic        trace_mem_vld  [NUM_CORES] /* verilator public_flat */;
 logic [31:0] trace_mem_addr [NUM_CORES] /* verilator public_flat */;
 logic [31:0] trace_mem_data [NUM_CORES] /* verilator public_flat */;
 logic [3:0]  trace_mem_mask [NUM_CORES] /* verilator public_flat */;
+logic [63:0] trace_mem_start_cycle [NUM_CORES] /* verilator public_flat */;
 
 logic [31:0] trace_trap_pc    [NUM_CORES] /* verilator public_flat */;
 logic        trace_trap_vld   [NUM_CORES] /* verilator public_flat */;
 logic [31:0] trace_trap_cause [NUM_CORES] /* verilator public_flat */;
+logic        trace_trap_exception [NUM_CORES] /* verilator public_flat */;
+logic        trace_trap_irq   [NUM_CORES] /* verilator public_flat */;
+logic [63:0] trace_trap_start_cycle [NUM_CORES] /* verilator public_flat */;
 
 for (genvar t = 0; t < NUM_CORES; t++) begin : gen_trace
   // Register writeback
@@ -111,6 +116,7 @@ for (genvar t = 0; t < NUM_CORES; t++) begin : gen_trace
   assign trace_reg_ir[t] = gen_cores[t].u_core.u_ex.log_reg_ir;
   assign trace_reg_op1[t] = gen_cores[t].u_core.u_ex.log_reg_op1;
   assign trace_reg_op2[t] = gen_cores[t].u_core.u_ex.log_reg_op2;
+  assign trace_reg_start_cycle[t] = gen_cores[t].u_core.u_ex.log_reg_start_cycle;
 
   // Architectural store events
   assign trace_mem_pc[t] = gen_cores[t].u_core.u_ex.log_mem_pc;
@@ -118,11 +124,15 @@ for (genvar t = 0; t < NUM_CORES; t++) begin : gen_trace
   assign trace_mem_addr[t] = gen_cores[t].u_core.u_ex.log_mem_addr;
   assign trace_mem_data[t] = gen_cores[t].u_core.u_ex.log_mem_data;
   assign trace_mem_mask[t] = gen_cores[t].u_core.u_ex.log_mem_mask;
+  assign trace_mem_start_cycle[t] = gen_cores[t].u_core.u_ex.log_mem_start_cycle;
 
   // Trap/exception events
   assign trace_trap_pc[t] = gen_cores[t].u_core.u_ex.log_trap_pc;
   assign trace_trap_vld[t] = gen_cores[t].u_core.u_ex.log_trap_pc_vld;
   assign trace_trap_cause[t] = gen_cores[t].u_core.u_ex.trap_cause;
+  assign trace_trap_exception[t] = gen_cores[t].u_core.u_ex.exception;
+  assign trace_trap_irq[t] = gen_cores[t].u_core.u_ex.core_interrupt;
+  assign trace_trap_start_cycle[t] = gen_cores[t].u_core.u_ex.log_trap_start_cycle;
 end
 
 typedef enum logic [2:0] {

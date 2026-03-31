@@ -64,19 +64,34 @@ logic activate_trap, return_trap;
 logic [31:0] trap_cause /* verilator public_flat */, trap_handle, trap_value;
 logic trap_jump /* verilator public_flat */;
 
-  logic instr_accept;
-  logic [31:0] log_reg_pc /* verilator public_flat */;
-  logic        log_reg_pc_vld /* verilator public_flat */;
-  logic [31:0] log_reg_ir /* verilator public_flat */;
-  logic [31:0] log_reg_op1 /* verilator public_flat */;
-  logic [31:0] log_reg_op2 /* verilator public_flat */;
-  logic [31:0] log_mem_pc /* verilator public_flat */;
-  logic        log_mem_pc_vld /* verilator public_flat */;
-  logic [31:0] log_mem_addr /* verilator public_flat */;
-  logic [31:0] log_mem_data /* verilator public_flat */;
-  logic [3:0]  log_mem_mask /* verilator public_flat */;
-  logic [31:0] log_trap_pc /* verilator public_flat */;
-  logic        log_trap_pc_vld /* verilator public_flat */;
+logic [31:0] exec_pc;
+logic [63:0] cycle_counter /* verilator public_flat */;
+logic [63:0] exec_start_cycle;
+logic [31:0] log_reg_pc /* verilator public_flat */;
+logic        log_reg_pc_vld /* verilator public_flat */;
+logic [31:0] log_reg_ir /* verilator public_flat */;
+logic [31:0] log_reg_op1 /* verilator public_flat */;
+logic [31:0] log_reg_op2 /* verilator public_flat */;
+logic [63:0] log_reg_start_cycle /* verilator public_flat */;
+logic [31:0] log_mem_pc /* verilator public_flat */;
+logic        log_mem_pc_vld /* verilator public_flat */;
+logic [31:0] log_mem_addr /* verilator public_flat */;
+logic [31:0] log_mem_data /* verilator public_flat */;
+logic [3:0]  log_mem_mask /* verilator public_flat */;
+logic [63:0] log_mem_start_cycle /* verilator public_flat */;
+logic [31:0] log_trap_pc /* verilator public_flat */;
+logic        log_trap_pc_vld /* verilator public_flat */;
+logic [63:0] log_trap_start_cycle /* verilator public_flat */;
+logic        regwr_fire;
+logic [31:0] regwr_log_pc;
+logic [63:0] regwr_log_start_cycle;
+logic        memwr_fire;
+logic [31:0] memwr_log_pc;
+logic [63:0] memwr_log_start_cycle;
+logic        trap_log_fire;
+logic [31:0] trap_log_pc;
+logic [63:0] trap_log_start_cycle;
+logic        track_exec_meta;
 
 enum logic [2:0] {
   STEADY,
@@ -142,7 +157,13 @@ end
 
 // Decoded instruction valid
 assign instr_vld = decode_vld && state == STEADY && ~exception && ~core_interrupt;
-assign instr_accept = decode_vld && decode_rdy;
+assign track_exec_meta = decode_vld && state == STEADY && (decode.load || decode.store || decode.csr ||
+                       core_interrupt || exception || decode.system);
+
+always_ff @(posedge clk or negedge rstz) begin
+  if (~rstz) cycle_counter <= '0;
+  else cycle_counter <= cycle_counter + 64'd1;
+end
 
 // Basic instructions
 assign basic_rdy = instr_vld && decode.basic;
@@ -151,32 +172,88 @@ assign basic_rdy = instr_vld && decode.basic;
 assign decode_rdy = |{basic_rdy, lsu_rdy, csr_rdy};
 
 always_ff @(posedge clk or negedge rstz) begin
+  if (~rstz) exec_pc <= '0;
+  else if (track_exec_meta) exec_pc <= decode.pc;
+end
+
+always_ff @(posedge clk or negedge rstz) begin
+  if (~rstz) exec_start_cycle <= '0;
+  else if (track_exec_meta) exec_start_cycle <= cycle_counter + 64'd1;
+end
+
+always_comb begin
+  regwr_fire = 1'b0;
+  regwr_log_pc = exec_pc;
+  regwr_log_start_cycle = exec_start_cycle;
+
+  if (instr_vld && decode.regwr_alu) begin
+    regwr_fire = 1'b1;
+    regwr_log_pc = decode.pc;
+    regwr_log_start_cycle = cycle_counter + 64'd1;
+  end
+  else if (lsu_rdy && regwr_lsu) begin
+    regwr_fire = 1'b1;
+    if (state == STEADY) begin
+      regwr_log_pc = decode.pc;
+      regwr_log_start_cycle = cycle_counter + 64'd1;
+    end
+  end
+  else if (csr_rdy && regwr_csr) begin
+    regwr_fire = 1'b1;
+  end
+end
+
+always_comb begin
+  memwr_fire = 1'b0;
+  memwr_log_pc = exec_pc;
+  memwr_log_start_cycle = exec_start_cycle;
+
+  if (lsu_rdy && decode.store) begin
+    memwr_fire = 1'b1;
+    if (state == STEADY) begin
+      memwr_log_pc = decode.pc;
+      memwr_log_start_cycle = cycle_counter + 64'd1;
+    end
+  end
+end
+
+always_comb begin
+  trap_log_fire = 1'b0;
+  trap_log_pc = exec_pc;
+  trap_log_start_cycle = exec_start_cycle;
+
+  if (state == STEADY && decode_vld && (core_interrupt || exception
+      || (decode.system && (decode.sysop == ECALL || decode.sysop == EBREAK)))) begin
+    trap_log_fire = 1'b1;
+    trap_log_pc = decode.pc;
+    trap_log_start_cycle = cycle_counter + 64'd1;
+  end
+  else if (state == WFINTR && core_interrupt) begin
+    trap_log_fire = 1'b1;
+  end
+end
+
+always_ff @(posedge clk or negedge rstz) begin
   if (~rstz) begin
     log_reg_pc <= '0;
     log_reg_pc_vld <= 1'b0;
     log_reg_ir <= '0;
     log_reg_op1 <= '0;
     log_reg_op2 <= '0;
+    log_reg_start_cycle <= '0;
   end
   else begin
-    // Align the logged PC with the architectural writeback event.
-    // Note: regwr_en is registered, so using it directly would delay the log by 1 cycle.
-    logic regwr_pulse;
-    regwr_pulse = (instr_vld && decode.regwr_alu)
-              || (lsu_rdy && regwr_lsu)
-              || (csr_rdy && regwr_csr);
-
-    log_reg_pc_vld <= regwr_pulse;
-    if (regwr_pulse) begin
-      log_reg_pc <= decode.pc;
+    log_reg_pc_vld <= regwr_fire;
+    if (regwr_fire) begin
+      log_reg_pc <= regwr_log_pc;
       log_reg_ir <= decode.ir;
       log_reg_op1 <= decode.op1;
       log_reg_op2 <= decode.op2;
+      log_reg_start_cycle <= regwr_log_start_cycle;
     end
   end
 end
 
-// Log architectural store events (PC/address/data/mask) when the store instruction retires.
 always_ff @(posedge clk or negedge rstz) begin
   if (~rstz) begin
     log_mem_pc <= '0;
@@ -184,46 +261,31 @@ always_ff @(posedge clk or negedge rstz) begin
     log_mem_addr <= '0;
     log_mem_data <= '0;
     log_mem_mask <= '0;
+    log_mem_start_cycle <= '0;
   end
   else begin
-    log_mem_pc_vld <= instr_accept && decode.store;
-    if (instr_accept && decode.store) begin
-      log_mem_pc <= decode.pc;
+    log_mem_pc_vld <= memwr_fire;
+    if (memwr_fire) begin
+      log_mem_pc <= memwr_log_pc;
       log_mem_addr <= {decode.addr[31:2], 2'b0};
       log_mem_data <= decode.op2;
       log_mem_mask <= decode.mask;
+      log_mem_start_cycle <= memwr_log_start_cycle;
     end
   end
 end
 
-
-// Log trap events when the trap cause is latched.
-//
-// Note: System/trap instructions (ECALL/EBREAK/WFI) and exceptions do not go through the
-// normal decode_rdy/instr_accept path, so `exec_pc` is not reliable here. Use `decode.pc`.
 always_ff @(posedge clk or negedge rstz) begin
   if (~rstz) begin
     log_trap_pc <= '0;
     log_trap_pc_vld <= 1'b0;
+    log_trap_start_cycle <= '0;
   end
   else begin
-    log_trap_pc_vld <= 1'b0;
-
-    if (decode_vld && state == STEADY) begin
-      if (core_interrupt
-          || decode.illegal
-          || (decode.misaligned_jmp && instr_jump)
-          || (decode.misaligned_ldst && decode.load)
-          || (decode.misaligned_ldst && decode.store)
-          || (decode.system && (decode.sysop == ECALL))
-          || (decode.system && (decode.sysop == EBREAK))) begin
-        log_trap_pc_vld <= 1'b1;
-        log_trap_pc <= decode.pc;
-      end
-    end
-    else if (state == WFINTR && core_interrupt) begin
-      log_trap_pc_vld <= 1'b1;
-      log_trap_pc <= decode.pc;
+    log_trap_pc_vld <= trap_log_fire;
+    if (trap_log_fire) begin
+      log_trap_pc <= trap_log_pc;
+      log_trap_start_cycle <= trap_log_start_cycle;
     end
   end
 end

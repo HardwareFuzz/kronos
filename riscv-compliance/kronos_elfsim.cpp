@@ -35,6 +35,8 @@ using std::runtime_error;
 using std::string;
 using std::vector;
 
+static constexpr int kNumCores = 2;
+
 // ELF32 structures (little-endian)
 struct Elf32_Ehdr {
   unsigned char e_ident[16];
@@ -79,6 +81,7 @@ class Sim {
       : top_(new kronos_compliance_top),
         trace_(nullptr),
         ticks_(0),
+        cycles_(0),
         mem_words_(256u * mem_kb),
         mem_mask_(mem_words_ - 1u),
         log_reg_(false),
@@ -119,12 +122,16 @@ class Sim {
     top_->clk = !top_->clk;
     top_->eval();
     // sample after posedge
-    if (top_->clk) log_sample_posedge_();
+    if (top_->clk) {
+      ++cycles_;
+      log_sample_posedge_();
+    }
     if (trace_) trace_->dump(ticks_);
     ++ticks_;
   }
 
   uint64_t ticks() const { return ticks_; }
+  uint64_t cycles() const { return cycles_; }
 
   // Load ELF PT_LOAD segments into internal memory array.
   // The SV memory uses word addressing of low bits only; we mirror via mask.
@@ -186,12 +193,9 @@ class Sim {
   void run(uint64_t max_cycles, bool watch_tohost, uint32_t tohost_addr, uint32_t pass_value) {
     for (uint64_t i = 0; i < max_cycles; ++i) {
       tick();
-      // Sample tohost on posedge.
-      // Use architectural store events (per-core) instead of the top-level bus to avoid
-      // coupling to memory arbitration/latency details.
       if (watch_tohost && top_->clk) {
         auto& R = *(top_->rootp);
-        for (int h = 0; h < 2; ++h) {
+        for (int h = 0; h < kNumCores; ++h) {
           if (!R.kronos_compliance_top__DOT__trace_mem_vld[h]) continue;
           const uint32_t addr = R.kronos_compliance_top__DOT__trace_mem_addr[h];
           const uint32_t data = R.kronos_compliance_top__DOT__trace_mem_data[h];
@@ -206,7 +210,8 @@ class Sim {
     }
   }
 
-  void enable_logging(bool log_reg, bool log_mem, bool log_trap, bool debug_reg, const string& logfile) {
+  void enable_logging(bool log_reg, bool log_mem, bool log_trap, bool debug_reg,
+                      const string& logfile) {
     log_reg_ = log_reg;
     log_mem_ = log_mem;
     log_trap_ = log_trap;
@@ -218,55 +223,78 @@ class Sim {
   }
 
  private:
-   void log_sample_posedge_() {
-     if (!(log_reg_ || log_mem_ || log_trap_)) return;
-     auto& R = *(top_->rootp);
+  uint64_t normalize_start_cycle_(uint64_t raw, uint64_t fallback) const {
+    return raw != 0 ? raw : fallback;
+  }
 
-     // The SV top exposes per-core trace signals via `public_flat` arrays.
-     // We log each event as a single line, keeping the same format expected
-     // by riscv_fuzz_test's Kronos parser.
-     for (int h = 0; h < 2; ++h) {
-        if (log_reg_ && R.kronos_compliance_top__DOT__trace_reg_vld[h]) {
-          const uint32_t pc = R.kronos_compliance_top__DOT__trace_reg_pc[h];
-          const uint32_t rd = R.kronos_compliance_top__DOT__trace_reg_rd[h] & 0x1f;
-          const uint32_t val = R.kronos_compliance_top__DOT__trace_reg_data[h];
-          const uint32_t ir = R.kronos_compliance_top__DOT__trace_reg_ir[h];
-          if (rd != 0) {
-            (*log_out_) << "[REG] pc=0x" << std::hex << pc
-                        << " x" << std::dec << rd
-                        << " <= 0x" << std::hex << val
-                        << " instr=0x" << ir;
+  void log_sample_posedge_() {
+    if (!(log_reg_ || log_mem_ || log_trap_)) return;
+    auto& R = *(top_->rootp);
+    for (int h = 0; h < kNumCores; ++h) {
+      if (log_reg_ && R.kronos_compliance_top__DOT__trace_reg_vld[h]) {
+        const uint32_t pc = R.kronos_compliance_top__DOT__trace_reg_pc[h];
+        const uint32_t rd = R.kronos_compliance_top__DOT__trace_reg_rd[h] & 0x1fu;
+        const uint32_t val = R.kronos_compliance_top__DOT__trace_reg_data[h];
+        const uint64_t clk_start = normalize_start_cycle_(
+            R.kronos_compliance_top__DOT__trace_reg_start_cycle[h], cycles_);
+        if (rd != 0) {
+          (*log_out_) << "[REG] pc=0x" << std::hex << pc
+                      << " x" << std::dec << rd
+                      << " <= 0x" << std::hex << val;
 
-            if (debug_reg_) {
-              const uint32_t op1 = R.kronos_compliance_top__DOT__trace_reg_op1[h];
-              const uint32_t op2 = R.kronos_compliance_top__DOT__trace_reg_op2[h];
-              (*log_out_) << " op1=0x" << std::hex << op1
-                          << " op2=0x" << std::hex << op2;
-            }
-
-            (*log_out_) << std::dec << "\n";
+          if (debug_reg_) {
+            const uint32_t ir = R.kronos_compliance_top__DOT__trace_reg_ir[h];
+            const uint32_t op1 = R.kronos_compliance_top__DOT__trace_reg_op1[h];
+            const uint32_t op2 = R.kronos_compliance_top__DOT__trace_reg_op2[h];
+            (*log_out_) << " instr=0x" << ir
+                        << " op1=0x" << op1
+                        << " op2=0x" << op2;
           }
+
+          (*log_out_) << std::dec
+                      << " hart=" << h
+                      << " clk_start=" << clk_start
+                      << " clk_end=" << cycles_
+                      << " clk_span=" << (cycles_ - clk_start + 1) << "\n";
         }
+      }
 
-       if (log_mem_ && R.kronos_compliance_top__DOT__trace_mem_vld[h]) {
-         const uint32_t pc = R.kronos_compliance_top__DOT__trace_mem_pc[h];
-         const uint32_t addr = R.kronos_compliance_top__DOT__trace_mem_addr[h];
-         const uint32_t data = R.kronos_compliance_top__DOT__trace_mem_data[h];
-         const uint32_t mask = R.kronos_compliance_top__DOT__trace_mem_mask[h] & 0xF;
-         (*log_out_) << "[MEMW] pc=0x" << std::hex << pc
-                     << " addr=0x" << addr
-                     << " data=0x" << data
-                     << " mask=0x" << mask << std::dec << "\n";
-       }
+      if (log_mem_ && R.kronos_compliance_top__DOT__trace_mem_vld[h]) {
+        const uint32_t pc = R.kronos_compliance_top__DOT__trace_mem_pc[h];
+        const uint32_t addr = R.kronos_compliance_top__DOT__trace_mem_addr[h];
+        const uint32_t data = R.kronos_compliance_top__DOT__trace_mem_data[h];
+        const uint32_t mask = R.kronos_compliance_top__DOT__trace_mem_mask[h] & 0xF;
+        const uint64_t clk_start = normalize_start_cycle_(
+            R.kronos_compliance_top__DOT__trace_mem_start_cycle[h], cycles_);
+        (*log_out_) << "[MEMW] pc=0x" << std::hex << pc
+                    << " addr=0x" << addr
+                    << " data=0x" << data
+                    << " mask=0x" << mask << std::dec
+                    << " hart=" << h
+                    << " clk_start=" << clk_start
+                    << " clk_end=" << cycles_
+                    << " clk_span=" << (cycles_ - clk_start + 1) << "\n";
+      }
 
-       if (log_trap_ && R.kronos_compliance_top__DOT__trace_trap_vld[h]) {
-         const uint32_t pc = R.kronos_compliance_top__DOT__trace_trap_pc[h];
-         const uint32_t cause = R.kronos_compliance_top__DOT__trace_trap_cause[h];
-         (*log_out_) << "[TRAP] pc=0x" << std::hex << pc
-                     << " cause=0x" << cause << std::dec << "\n";
-       }
-     }
-   }
+      if (log_trap_ && R.kronos_compliance_top__DOT__trace_trap_vld[h]) {
+        const uint32_t pc = R.kronos_compliance_top__DOT__trace_trap_pc[h];
+        const uint32_t cause = R.kronos_compliance_top__DOT__trace_trap_cause[h];
+        const uint8_t exception_flag =
+            R.kronos_compliance_top__DOT__trace_trap_exception[h];
+        const uint8_t irq_flag = R.kronos_compliance_top__DOT__trace_trap_irq[h];
+        const uint64_t clk_start = normalize_start_cycle_(
+            R.kronos_compliance_top__DOT__trace_trap_start_cycle[h], cycles_);
+        (*log_out_) << "[TRAP] pc=0x" << std::hex << pc
+                    << " exception=" << static_cast<int>(exception_flag)
+                    << " irq=" << static_cast<int>(irq_flag)
+                    << " cause=0x" << cause << std::dec
+                    << " hart=" << h
+                    << " clk_start=" << clk_start
+                    << " clk_end=" << cycles_
+                    << " clk_span=" << (cycles_ - clk_start + 1) << "\n";
+      }
+    }
+  }
 
   void write_mem_word(uint32_t addr, uint32_t data) {
     // Word addressing; low bits used per generic_spram (addr[2+:NWORDS_WIDTH])
@@ -277,20 +305,21 @@ class Sim {
   kronos_compliance_top *top_;
   VerilatedVcdC *trace_;
   uint64_t ticks_;
+  uint64_t cycles_;
   uint32_t mem_words_;
   uint32_t mem_mask_;
   bool log_reg_;
   bool log_mem_;
   bool log_trap_;
   bool debug_reg_;
-   std::ostream* log_out_;
-   std::unique_ptr<std::ofstream> log_of_;
+  std::ostream* log_out_;
+  std::unique_ptr<std::ofstream> log_of_;
 };
 
 static void print_usage() {
   cout << "Usage:\n"
-           "  kronos_elfsim <program.elf> [--vcd out.vcd] [--max-cycles N] "
-           "[--mem-kb KB] [--covfile path] [--debug-reg]\n";
+          "  kronos_elfsim <program.elf> [--vcd out.vcd] [--max-cycles N] "
+          "[--mem-kb KB] [--covfile path] [--debug-reg]\n";
 }
 
 int main(int argc, char **argv) {
@@ -385,7 +414,7 @@ int main(int argc, char **argv) {
     sim.run(max_cycles, watch_tohost, tohost_addr, pass_value);
     sim.stop_trace();
     cout << "Done. Ticks: " << sim.ticks() << endl;
-    cout << "Cycles: " << (sim.ticks() / 2) << endl;
+    cout << "Cycles: " << sim.cycles() << endl;
 #if VM_COVERAGE
     Verilated::threadContextp()->coveragep()->write(cov_file.c_str());
     cout << "Coverage: " << cov_file << endl;
