@@ -78,6 +78,7 @@ class Sim {
       : top_(new kronos_compliance_top),
         trace_(nullptr),
         ticks_(0),
+        cycles_(0),
         mem_words_(256u * mem_kb),
         mem_mask_(mem_words_ - 1u),
         log_reg_(false),
@@ -117,12 +118,16 @@ class Sim {
     top_->clk = !top_->clk;
     top_->eval();
     // sample after posedge
-    if (top_->clk) log_sample_posedge_();
+    if (top_->clk) {
+      ++cycles_;
+      log_sample_posedge_();
+    }
     if (trace_) trace_->dump(ticks_);
     ++ticks_;
   }
 
   uint64_t ticks() const { return ticks_; }
+  uint64_t cycles() const { return cycles_; }
 
   // Load ELF PT_LOAD segments into internal memory array.
   // The SV memory uses word addressing of low bits only; we mirror via mask.
@@ -194,7 +199,7 @@ class Sim {
     }
   }
 
-  void enable_logging(bool log_reg, bool log_mem, bool log_trap, const string& logfile) {
+ void enable_logging(bool log_reg, bool log_mem, bool log_trap, const string& logfile) {
     log_reg_ = log_reg;
     log_mem_ = log_mem;
     log_trap_ = log_trap;
@@ -205,60 +210,56 @@ class Sim {
   }
 
  private:
+  uint64_t normalize_start_cycle_(uint64_t raw, uint64_t fallback) const {
+    return raw != 0 ? raw : fallback;
+  }
+
   void log_sample_posedge_() {
     if (!(log_reg_ || log_mem_ || log_trap_)) return;
     auto& R = *(top_->rootp);
-    uint32_t commit_pc = R.kronos_compliance_top__DOT__commit_pc_mon;
-    uint32_t pc = wb_pc_valid_ ? wb_pc_ : commit_pc;
-    bool did_commit = false;
-
-    if (log_reg_ && R.kronos_compliance_top__DOT__u_dut__DOT__regwr_en) {
-      uint32_t pc_reg = prev_pc_mon_;
+    if (log_reg_ && R.kronos_compliance_top__DOT__u_dut__DOT__u_ex__DOT__log_reg_pc_vld) {
+      uint32_t pc_reg = R.kronos_compliance_top__DOT__u_dut__DOT__u_ex__DOT__log_reg_pc;
+      uint64_t clk_start = normalize_start_cycle_(
+          R.kronos_compliance_top__DOT__u_dut__DOT__u_ex__DOT__log_reg_start_cycle, cycles_);
       uint32_t rd = R.kronos_compliance_top__DOT__u_dut__DOT__regwr_sel & 0x1fu;
       uint32_t rdv = R.kronos_compliance_top__DOT__u_dut__DOT__regwr_data;
       (*log_out_) << "[REG] pc=0x" << std::hex << pc_reg
                   << " x" << std::dec << rd
-                  << " <= 0x" << std::hex << rdv << std::dec << "\n";
-      did_commit = true;
+                  << " <= 0x" << std::hex << rdv << std::dec
+                  << " clk_start=" << clk_start
+                  << " clk_end=" << cycles_
+                  << " clk_span=" << (cycles_ - clk_start + 1) << "\n";
     }
-    if (log_mem_ && top_->data_req && top_->data_wr_en) {
+    if (log_mem_ && R.kronos_compliance_top__DOT__u_dut__DOT__u_ex__DOT__log_mem_pc_vld) {
       uint32_t addr = top_->data_addr;
       uint32_t wdata = top_->data_wr_data;
       uint32_t mask = top_->data_mask;
-      uint32_t pc_mem = commit_pc;
+      uint32_t pc_mem = R.kronos_compliance_top__DOT__u_dut__DOT__u_ex__DOT__log_mem_pc;
+      uint64_t clk_start = normalize_start_cycle_(
+          R.kronos_compliance_top__DOT__u_dut__DOT__u_ex__DOT__log_mem_start_cycle, cycles_);
       (*log_out_) << "[MEMW] pc=0x" << std::hex << pc_mem
                   << " addr=0x" << addr
                   << " data=0x" << wdata
-                  << " mask=0x" << mask << std::dec << "\n";
-      did_commit = true;
+                  << " mask=0x" << mask << std::dec
+                  << " clk_start=" << clk_start
+                  << " clk_end=" << cycles_
+                  << " clk_span=" << (cycles_ - clk_start + 1) << "\n";
     }
-    if (log_trap_) {
+    if (log_trap_ && R.kronos_compliance_top__DOT__u_dut__DOT__u_ex__DOT__log_trap_pc_vld) {
       uint8_t exception_flag = R.kronos_compliance_top__DOT__u_dut__DOT__u_ex__DOT__exception;
-      uint8_t trap_jump_flag = R.kronos_compliance_top__DOT__u_dut__DOT__u_ex__DOT__trap_jump;
       uint8_t irq_flag = R.kronos_compliance_top__DOT__u_dut__DOT__u_ex__DOT__core_interrupt;
-      if (exception_flag || trap_jump_flag || irq_flag) {
-        uint32_t cause = R.kronos_compliance_top__DOT__u_dut__DOT__u_ex__DOT__trap_cause;
-        (*log_out_) << "[TRAP] pc=0x" << std::hex << pc
-                    << " exception=" << static_cast<int>(exception_flag)
-                    << " trap_jump=" << static_cast<int>(trap_jump_flag)
-                    << " irq=" << static_cast<int>(irq_flag)
-                    << " cause=0x" << cause << std::dec << "\n";
-      }
+      uint32_t cause = R.kronos_compliance_top__DOT__u_dut__DOT__u_ex__DOT__trap_cause;
+      uint32_t pc = R.kronos_compliance_top__DOT__u_dut__DOT__u_ex__DOT__log_trap_pc;
+      uint64_t clk_start = normalize_start_cycle_(
+          R.kronos_compliance_top__DOT__u_dut__DOT__u_ex__DOT__log_trap_start_cycle, cycles_);
+      (*log_out_) << "[TRAP] pc=0x" << std::hex << pc
+                  << " exception=" << static_cast<int>(exception_flag)
+                  << " irq=" << static_cast<int>(irq_flag)
+                  << " cause=0x" << cause << std::dec
+                  << " clk_start=" << clk_start
+                  << " clk_end=" << cycles_
+                  << " clk_span=" << (cycles_ - clk_start + 1) << "\n";
     }
-
-    if (did_commit) {
-      wb_pc_valid_ = false;
-      if (R.kronos_compliance_top__DOT__u_dut__DOT__u_ex__DOT__instr_vld && !wb_pc_valid_) {
-        wb_pc_ = commit_pc;
-        wb_pc_valid_ = true;
-      }
-    } else {
-      if (R.kronos_compliance_top__DOT__u_dut__DOT__u_ex__DOT__instr_vld && !wb_pc_valid_) {
-        wb_pc_ = commit_pc;
-        wb_pc_valid_ = true;
-      }
-    }
-    prev_pc_mon_ = commit_pc;
   }
 
   void write_mem_word(uint32_t addr, uint32_t data) {
@@ -270,6 +271,7 @@ class Sim {
   kronos_compliance_top *top_;
   VerilatedVcdC *trace_;
   uint64_t ticks_;
+  uint64_t cycles_;
   uint32_t mem_words_;
   uint32_t mem_mask_;
   bool log_reg_;
@@ -277,9 +279,6 @@ class Sim {
   bool log_trap_;
   std::ostream* log_out_;
   std::unique_ptr<std::ofstream> log_of_;
-  uint32_t wb_pc_ = 0;
-  bool wb_pc_valid_ = false;
-  uint32_t prev_pc_mon_ = 0;
 };
 
 static void print_usage() {
@@ -377,7 +376,7 @@ int main(int argc, char **argv) {
     sim.run(max_cycles, watch_tohost, tohost_addr, pass_value);
     sim.stop_trace();
     cout << "Done. Ticks: " << sim.ticks() << endl;
-    cout << "Cycles: " << (sim.ticks() / 2) << endl;
+    cout << "Cycles: " << sim.cycles() << endl;
 #if VM_COVERAGE
     Verilated::threadContextp()->coveragep()->write(cov_file.c_str());
     cout << "Coverage: " << cov_file << endl;

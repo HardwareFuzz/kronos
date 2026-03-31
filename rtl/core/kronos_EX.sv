@@ -63,15 +63,28 @@ logic activate_trap, return_trap;
 logic [31:0] trap_cause /* verilator public_flat */, trap_handle, trap_value;
 logic trap_jump /* verilator public_flat */;
 
-logic instr_accept;
 logic [31:0] exec_pc;
+logic [63:0] cycle_counter /* verilator public_flat */;
+logic [63:0] exec_start_cycle;
 logic [31:0] log_reg_pc /* verilator public_flat */;
 logic        log_reg_pc_vld /* verilator public_flat */;
+logic [63:0] log_reg_start_cycle /* verilator public_flat */;
+logic [31:0] log_mem_pc /* verilator public_flat */;
+logic        log_mem_pc_vld /* verilator public_flat */;
+logic [63:0] log_mem_start_cycle /* verilator public_flat */;
 logic [31:0] log_trap_pc /* verilator public_flat */;
 logic        log_trap_pc_vld /* verilator public_flat */;
-logic        trap_event_q;
-logic        trap_event_now;
-logic        trap_event_pulse;
+logic [63:0] log_trap_start_cycle /* verilator public_flat */;
+logic        regwr_fire;
+logic [31:0] regwr_log_pc;
+logic [63:0] regwr_log_start_cycle;
+logic        memwr_fire;
+logic [31:0] memwr_log_pc;
+logic [63:0] memwr_log_start_cycle;
+logic        trap_log_fire;
+logic [31:0] trap_log_pc;
+logic [63:0] trap_log_start_cycle;
+logic        track_exec_meta;
 
 enum logic [2:0] {
   STEADY,
@@ -132,7 +145,13 @@ end
 
 // Decoded instruction valid
 assign instr_vld = decode_vld && state == STEADY && ~exception && ~core_interrupt;
-assign instr_accept = decode_vld && decode_rdy;
+assign track_exec_meta = decode_vld && state == STEADY && (decode.load || decode.store || decode.csr ||
+                       core_interrupt || exception || decode.system);
+
+always_ff @(posedge clk or negedge rstz) begin
+  if (~rstz) cycle_counter <= '0;
+  else cycle_counter <= cycle_counter + 64'd1;
+end
 
 // Basic instructions
 assign basic_rdy = instr_vld && decode.basic;
@@ -142,38 +161,108 @@ assign decode_rdy = |{basic_rdy, lsu_rdy, csr_rdy};
 
 always_ff @(posedge clk or negedge rstz) begin
   if (~rstz) exec_pc <= '0;
-  else if (instr_accept) exec_pc <= decode.pc;
+  else if (track_exec_meta) exec_pc <= decode.pc;
+end
+
+always_ff @(posedge clk or negedge rstz) begin
+  if (~rstz) exec_start_cycle <= '0;
+  else if (track_exec_meta) exec_start_cycle <= cycle_counter + 64'd1;
+end
+
+always_comb begin
+  regwr_fire = 1'b0;
+  regwr_log_pc = exec_pc;
+  regwr_log_start_cycle = exec_start_cycle;
+
+  if (instr_vld && decode.regwr_alu) begin
+    regwr_fire = 1'b1;
+    regwr_log_pc = decode.pc;
+    regwr_log_start_cycle = cycle_counter + 64'd1;
+  end
+  else if (lsu_rdy && regwr_lsu) begin
+    regwr_fire = 1'b1;
+    if (state == STEADY) begin
+      regwr_log_pc = decode.pc;
+      regwr_log_start_cycle = cycle_counter + 64'd1;
+    end
+  end
+  else if (csr_rdy && regwr_csr) begin
+    regwr_fire = 1'b1;
+  end
+end
+
+always_comb begin
+  memwr_fire = 1'b0;
+  memwr_log_pc = exec_pc;
+  memwr_log_start_cycle = exec_start_cycle;
+
+  if (lsu_rdy && decode.store) begin
+    memwr_fire = 1'b1;
+    if (state == STEADY) begin
+      memwr_log_pc = decode.pc;
+      memwr_log_start_cycle = cycle_counter + 64'd1;
+    end
+  end
+end
+
+always_comb begin
+  trap_log_fire = 1'b0;
+  trap_log_pc = exec_pc;
+  trap_log_start_cycle = exec_start_cycle;
+
+  if (state == STEADY && decode_vld && (core_interrupt || exception
+      || (decode.system && (decode.sysop == ECALL || decode.sysop == EBREAK)))) begin
+    trap_log_fire = 1'b1;
+    trap_log_pc = decode.pc;
+    trap_log_start_cycle = cycle_counter + 64'd1;
+  end
+  else if (state == WFINTR && core_interrupt) begin
+    trap_log_fire = 1'b1;
+  end
 end
 
 always_ff @(posedge clk or negedge rstz) begin
   if (~rstz) begin
     log_reg_pc <= '0;
     log_reg_pc_vld <= 1'b0;
+    log_reg_start_cycle <= '0;
   end
   else begin
-    log_reg_pc_vld <= regwr_en;
-    if (regwr_en) log_reg_pc <= exec_pc;
+    log_reg_pc_vld <= regwr_fire;
+    if (regwr_fire) begin
+      log_reg_pc <= regwr_log_pc;
+      log_reg_start_cycle <= regwr_log_start_cycle;
+    end
   end
 end
 
-
-assign trap_event_now = exception || trap_jump || core_interrupt;
-
 always_ff @(posedge clk or negedge rstz) begin
-  if (~rstz) trap_event_q <= 1'b0;
-  else trap_event_q <= trap_event_now;
+  if (~rstz) begin
+    log_mem_pc <= '0;
+    log_mem_pc_vld <= 1'b0;
+    log_mem_start_cycle <= '0;
+  end
+  else begin
+    log_mem_pc_vld <= memwr_fire;
+    if (memwr_fire) begin
+      log_mem_pc <= memwr_log_pc;
+      log_mem_start_cycle <= memwr_log_start_cycle;
+    end
+  end
 end
-
-assign trap_event_pulse = trap_event_now && ~trap_event_q;
 
 always_ff @(posedge clk or negedge rstz) begin
   if (~rstz) begin
     log_trap_pc <= '0;
     log_trap_pc_vld <= 1'b0;
+    log_trap_start_cycle <= '0;
   end
   else begin
-    log_trap_pc_vld <= trap_event_pulse;
-    if (trap_event_pulse) log_trap_pc <= exec_pc;
+    log_trap_pc_vld <= trap_log_fire;
+    if (trap_log_fire) begin
+      log_trap_pc <= trap_log_pc;
+      log_trap_start_cycle <= trap_log_start_cycle;
+    end
   end
 end
 
