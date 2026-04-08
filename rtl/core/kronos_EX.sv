@@ -66,11 +66,17 @@ logic trap_jump /* verilator public_flat */;
 logic [31:0] exec_pc;
 logic [63:0] cycle_counter /* verilator public_flat */;
 logic [63:0] exec_start_cycle;
+logic [31:0] exec_mem_addr;
+logic [31:0] exec_mem_data;
+logic [3:0]  exec_mem_mask;
 logic [31:0] log_reg_pc /* verilator public_flat */;
 logic        log_reg_pc_vld /* verilator public_flat */;
 logic [63:0] log_reg_start_cycle /* verilator public_flat */;
 logic [31:0] log_mem_pc /* verilator public_flat */;
 logic        log_mem_pc_vld /* verilator public_flat */;
+logic [31:0] log_mem_addr /* verilator public_flat */;
+logic [31:0] log_mem_data /* verilator public_flat */;
+logic [3:0]  log_mem_mask /* verilator public_flat */;
 logic [63:0] log_mem_start_cycle /* verilator public_flat */;
 logic [31:0] log_trap_pc /* verilator public_flat */;
 logic        log_trap_pc_vld /* verilator public_flat */;
@@ -169,6 +175,19 @@ always_ff @(posedge clk or negedge rstz) begin
   else if (track_exec_meta) exec_start_cycle <= cycle_counter + 64'd1;
 end
 
+always_ff @(posedge clk or negedge rstz) begin
+  if (~rstz) begin
+    exec_mem_addr <= '0;
+    exec_mem_data <= '0;
+    exec_mem_mask <= '0;
+  end
+  else if (decode_vld && state == STEADY && (decode.load || decode.store)) begin
+    exec_mem_addr <= {decode.addr[31:2], 2'b0};
+    exec_mem_data <= decode.op2;
+    exec_mem_mask <= decode.mask;
+  end
+end
+
 always_comb begin
   regwr_fire = 1'b0;
   regwr_log_pc = exec_pc;
@@ -240,12 +259,25 @@ always_ff @(posedge clk or negedge rstz) begin
   if (~rstz) begin
     log_mem_pc <= '0;
     log_mem_pc_vld <= 1'b0;
+    log_mem_addr <= '0;
+    log_mem_data <= '0;
+    log_mem_mask <= '0;
     log_mem_start_cycle <= '0;
   end
   else begin
     log_mem_pc_vld <= memwr_fire;
     if (memwr_fire) begin
       log_mem_pc <= memwr_log_pc;
+      if (state == STEADY) begin
+        log_mem_addr <= {decode.addr[31:2], 2'b0};
+        log_mem_data <= decode.op2;
+        log_mem_mask <= decode.mask;
+      end
+      else begin
+        log_mem_addr <= exec_mem_addr;
+        log_mem_data <= exec_mem_data;
+        log_mem_mask <= exec_mem_mask;
+      end
       log_mem_start_cycle <= memwr_log_start_cycle;
     end
   end

@@ -231,9 +231,9 @@ class Sim {
                   << " clk_span=" << (cycles_ - clk_start + 1) << "\n";
     }
     if (log_mem_ && R.kronos_compliance_top__DOT__u_dut__DOT__u_ex__DOT__log_mem_pc_vld) {
-      uint32_t addr = top_->data_addr;
-      uint32_t wdata = top_->data_wr_data;
-      uint32_t mask = top_->data_mask;
+      uint32_t addr = R.kronos_compliance_top__DOT__u_dut__DOT__u_ex__DOT__log_mem_addr;
+      uint32_t wdata = R.kronos_compliance_top__DOT__u_dut__DOT__u_ex__DOT__log_mem_data;
+      uint32_t mask = R.kronos_compliance_top__DOT__u_dut__DOT__u_ex__DOT__log_mem_mask;
       uint32_t pc_mem = R.kronos_compliance_top__DOT__u_dut__DOT__u_ex__DOT__log_mem_pc;
       uint64_t clk_start = normalize_start_cycle_(
           R.kronos_compliance_top__DOT__u_dut__DOT__u_ex__DOT__log_mem_start_cycle, cycles_);
