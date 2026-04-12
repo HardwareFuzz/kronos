@@ -87,6 +87,7 @@ class Sim {
         log_reg_(false),
         log_mem_(false),
         log_trap_(false),
+        log_inst_(false),
         debug_reg_(false),
         log_out_(&std::cout) {
     top_->clk = 0;
@@ -210,11 +211,12 @@ class Sim {
     }
   }
 
-  void enable_logging(bool log_reg, bool log_mem, bool log_trap, bool debug_reg,
+  void enable_logging(bool log_reg, bool log_mem, bool log_trap, bool log_inst, bool debug_reg,
                       const string& logfile) {
     log_reg_ = log_reg;
     log_mem_ = log_mem;
     log_trap_ = log_trap;
+    log_inst_ = log_inst;
     debug_reg_ = debug_reg;
     if (!logfile.empty()) {
       log_of_ = std::make_unique<std::ofstream>(logfile);
@@ -228,9 +230,20 @@ class Sim {
   }
 
   void log_sample_posedge_() {
-    if (!(log_reg_ || log_mem_ || log_trap_)) return;
+    if (!(log_reg_ || log_mem_ || log_trap_ || log_inst_)) return;
     auto& R = *(top_->rootp);
     for (int h = 0; h < kNumCores; ++h) {
+      if (log_inst_ && R.kronos_compliance_top__DOT__trace_inst_vld[h]) {
+        const uint32_t pc = R.kronos_compliance_top__DOT__trace_inst_pc[h];
+        const uint64_t clk_start = normalize_start_cycle_(
+            R.kronos_compliance_top__DOT__trace_inst_start_cycle[h], cycles_);
+        (*log_out_) << "[INST] pc=0x" << std::hex << pc << std::dec
+                    << " hart=" << h
+                    << " clk_start=" << clk_start
+                    << " clk_end=" << cycles_
+                    << " clk_span=" << (cycles_ - clk_start + 1) << "\n";
+      }
+
       if (log_reg_ && R.kronos_compliance_top__DOT__trace_reg_vld[h]) {
         const uint32_t pc = R.kronos_compliance_top__DOT__trace_reg_pc[h];
         const uint32_t rd = R.kronos_compliance_top__DOT__trace_reg_rd[h] & 0x1fu;
@@ -311,6 +324,7 @@ class Sim {
   bool log_reg_;
   bool log_mem_;
   bool log_trap_;
+  bool log_inst_;
   bool debug_reg_;
   std::ostream* log_out_;
   std::unique_ptr<std::ofstream> log_of_;
@@ -337,7 +351,7 @@ int main(int argc, char **argv) {
   bool watch_tohost = false;
   uint32_t tohost_addr = 0;
   uint32_t pass_value = 1;
-  bool log_reg=false, log_mem=false, log_trap=false;
+  bool log_reg=false, log_mem=false, log_trap=false, log_inst=false;
   bool debug_reg=false;
   string log_file;
   string cov_file = "logs/coverage.dat";
@@ -363,10 +377,11 @@ int main(int argc, char **argv) {
       std::stringstream ss(s);
       string item;
       while (std::getline(ss, item, ',')) {
-        if (item == "all") { log_reg=log_mem=log_trap=true; }
+        if (item == "all") { log_reg=log_mem=log_trap=log_inst=true; }
         else if (item == "reg") log_reg = true;
         else if (item == "mem") log_mem = true;
         else if (item == "trap") log_trap = true;
+        else if (item == "inst") log_inst = true;
       }
     } else if (a == "--log-file" && (i + 1) < argc) {
       log_file = argv[++i];
@@ -409,7 +424,7 @@ int main(int argc, char **argv) {
     Sim sim(mem_kb);
     sim.start_trace(vcd);
     sim.reset();
-    sim.enable_logging(log_reg, log_mem, log_trap, debug_reg, log_file);
+    sim.enable_logging(log_reg, log_mem, log_trap, log_inst, debug_reg, log_file);
     sim.load_elf(elf);
     sim.run(max_cycles, watch_tohost, tohost_addr, pass_value);
     sim.stop_trace();

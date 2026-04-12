@@ -99,6 +99,10 @@ logic [31:0] trace_mem_data [NUM_CORES] /* verilator public_flat */;
 logic [3:0]  trace_mem_mask [NUM_CORES] /* verilator public_flat */;
 logic [63:0] trace_mem_start_cycle [NUM_CORES] /* verilator public_flat */;
 
+logic [31:0] trace_inst_pc   [NUM_CORES] /* verilator public_flat */;
+logic        trace_inst_vld  [NUM_CORES] /* verilator public_flat */;
+logic [63:0] trace_inst_start_cycle [NUM_CORES] /* verilator public_flat */;
+
 logic [31:0] trace_trap_pc    [NUM_CORES] /* verilator public_flat */;
 logic        trace_trap_vld   [NUM_CORES] /* verilator public_flat */;
 logic [31:0] trace_trap_cause [NUM_CORES] /* verilator public_flat */;
@@ -125,6 +129,11 @@ for (genvar t = 0; t < NUM_CORES; t++) begin : gen_trace
   assign trace_mem_data[t] = gen_cores[t].u_core.u_ex.log_mem_data;
   assign trace_mem_mask[t] = gen_cores[t].u_core.u_ex.log_mem_mask;
   assign trace_mem_start_cycle[t] = gen_cores[t].u_core.u_ex.log_mem_start_cycle;
+
+  // Generic retired-instruction timing events
+  assign trace_inst_pc[t] = gen_cores[t].u_core.u_ex.log_inst_pc;
+  assign trace_inst_vld[t] = gen_cores[t].u_core.u_ex.log_inst_pc_vld;
+  assign trace_inst_start_cycle[t] = gen_cores[t].u_core.u_ex.log_inst_start_cycle;
 
   // Trap/exception events
   assign trace_trap_pc[t] = gen_cores[t].u_core.u_ex.log_trap_pc;

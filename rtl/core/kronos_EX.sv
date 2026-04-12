@@ -82,9 +82,15 @@ logic [31:0] log_mem_addr /* verilator public_flat */;
 logic [31:0] log_mem_data /* verilator public_flat */;
 logic [3:0]  log_mem_mask /* verilator public_flat */;
 logic [63:0] log_mem_start_cycle /* verilator public_flat */;
+logic [31:0] log_inst_pc /* verilator public_flat */;
+logic        log_inst_pc_vld /* verilator public_flat */;
+logic [63:0] log_inst_start_cycle /* verilator public_flat */;
 logic [31:0] log_trap_pc /* verilator public_flat */;
 logic        log_trap_pc_vld /* verilator public_flat */;
 logic [63:0] log_trap_start_cycle /* verilator public_flat */;
+logic        inst_log_fire;
+logic [31:0] inst_log_pc;
+logic [63:0] inst_log_start_cycle;
 logic        regwr_fire;
 logic [31:0] regwr_log_pc;
 logic [63:0] regwr_log_start_cycle;
@@ -198,6 +204,28 @@ always_ff @(posedge clk or negedge rstz) begin
 end
 
 always_comb begin
+  inst_log_fire = 1'b0;
+  inst_log_pc = exec_pc;
+  inst_log_start_cycle = exec_start_cycle;
+
+  if (basic_rdy) begin
+    inst_log_fire = 1'b1;
+    inst_log_pc = decode.pc;
+    inst_log_start_cycle = cycle_counter + 64'd1;
+  end
+  else if (lsu_rdy || csr_rdy) begin
+    inst_log_fire = 1'b1;
+    if (state == STEADY) begin
+      inst_log_pc = decode.pc;
+      inst_log_start_cycle = cycle_counter + 64'd1;
+    end
+  end
+  else if (decode.system && trap_jump) begin
+    inst_log_fire = 1'b1;
+  end
+end
+
+always_comb begin
   regwr_fire = 1'b0;
   regwr_log_pc = exec_pc;
   regwr_log_start_cycle = exec_start_cycle;
@@ -246,6 +274,21 @@ always_comb begin
   end
   else if (state == WFINTR && core_interrupt) begin
     trap_log_fire = 1'b1;
+  end
+end
+
+always_ff @(posedge clk or negedge rstz) begin
+  if (~rstz) begin
+    log_inst_pc <= '0;
+    log_inst_pc_vld <= 1'b0;
+    log_inst_start_cycle <= '0;
+  end
+  else begin
+    log_inst_pc_vld <= inst_log_fire;
+    if (inst_log_fire) begin
+      log_inst_pc <= inst_log_pc;
+      log_inst_start_cycle <= inst_log_start_cycle;
+    end
   end
 end
 
