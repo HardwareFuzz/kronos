@@ -81,6 +81,7 @@ class Sim {
         cycles_(0),
         mem_words_(256u * mem_kb),
         mem_mask_(mem_words_ - 1u),
+        log_inst_(false),
         log_reg_(false),
         log_mem_(false),
         log_trap_(false),
@@ -199,7 +200,8 @@ class Sim {
     }
   }
 
- void enable_logging(bool log_reg, bool log_mem, bool log_trap, const string& logfile) {
+ void enable_logging(bool log_inst, bool log_reg, bool log_mem, bool log_trap, const string& logfile) {
+    log_inst_ = log_inst;
     log_reg_ = log_reg;
     log_mem_ = log_mem;
     log_trap_ = log_trap;
@@ -215,14 +217,23 @@ class Sim {
   }
 
   void log_sample_posedge_() {
-    if (!(log_reg_ || log_mem_ || log_trap_)) return;
+    if (!(log_inst_ || log_reg_ || log_mem_ || log_trap_)) return;
     auto& R = *(top_->rootp);
+    if (log_inst_ && R.kronos_compliance_top__DOT__u_dut__DOT__u_ex__DOT__log_inst_pc_vld) {
+      uint32_t pc_inst = R.kronos_compliance_top__DOT__u_dut__DOT__u_ex__DOT__log_inst_pc;
+      uint64_t clk_start = normalize_start_cycle_(
+          R.kronos_compliance_top__DOT__u_dut__DOT__u_ex__DOT__log_inst_start_cycle, cycles_);
+      (*log_out_) << "[INST] pc=0x" << std::hex << pc_inst << std::dec
+                  << " clk_start=" << clk_start
+                  << " clk_end=" << cycles_
+                  << " clk_span=" << (cycles_ - clk_start + 1) << "\n";
+    }
     if (log_reg_ && R.kronos_compliance_top__DOT__u_dut__DOT__u_ex__DOT__log_reg_pc_vld) {
       uint32_t pc_reg = R.kronos_compliance_top__DOT__u_dut__DOT__u_ex__DOT__log_reg_pc;
       uint64_t clk_start = normalize_start_cycle_(
           R.kronos_compliance_top__DOT__u_dut__DOT__u_ex__DOT__log_reg_start_cycle, cycles_);
-      uint32_t rd = R.kronos_compliance_top__DOT__u_dut__DOT__regwr_sel & 0x1fu;
-      uint32_t rdv = R.kronos_compliance_top__DOT__u_dut__DOT__regwr_data;
+      uint32_t rd = R.kronos_compliance_top__DOT__u_dut__DOT__u_ex__DOT__log_reg_rd & 0x1fu;
+      uint32_t rdv = R.kronos_compliance_top__DOT__u_dut__DOT__u_ex__DOT__log_reg_data;
       (*log_out_) << "[REG] pc=0x" << std::hex << pc_reg
                   << " x" << std::dec << rd
                   << " <= 0x" << std::hex << rdv << std::dec
@@ -274,6 +285,7 @@ class Sim {
   uint64_t cycles_;
   uint32_t mem_words_;
   uint32_t mem_mask_;
+  bool log_inst_;
   bool log_reg_;
   bool log_mem_;
   bool log_trap_;
@@ -302,7 +314,7 @@ int main(int argc, char **argv) {
   bool watch_tohost = false;
   uint32_t tohost_addr = 0;
   uint32_t pass_value = 1;
-  bool log_reg=false, log_mem=false, log_trap=false;
+  bool log_inst=false, log_reg=false, log_mem=false, log_trap=false;
   string log_file;
   string cov_file = "logs/coverage.dat";
   bool cov_file_cli = false;  // track if user passed --covfile
@@ -327,7 +339,8 @@ int main(int argc, char **argv) {
       std::stringstream ss(s);
       string item;
       while (std::getline(ss, item, ',')) {
-        if (item == "all") { log_reg=log_mem=log_trap=true; }
+        if (item == "all") { log_inst=log_reg=log_mem=log_trap=true; }
+        else if (item == "inst") log_inst = true;
         else if (item == "reg") log_reg = true;
         else if (item == "mem") log_mem = true;
         else if (item == "trap") log_trap = true;
@@ -371,7 +384,7 @@ int main(int argc, char **argv) {
     Sim sim(mem_kb);
     sim.start_trace(vcd);
     sim.reset();
-    sim.enable_logging(log_reg, log_mem, log_trap, log_file);
+    sim.enable_logging(log_inst, log_reg, log_mem, log_trap, log_file);
     sim.load_elf(elf);
     sim.run(max_cycles, watch_tohost, tohost_addr, pass_value);
     sim.stop_trace();

@@ -36,6 +36,10 @@ logic is_reg_write, csr_regwr;
 logic regwr_pending;
 logic rs1_hazard, rs2_hazard;
 logic [4:0] rpend;
+logic [1:0] rpend_count;
+logic [4:0] rpend_next;
+logic [1:0] rpend_count_next;
+logic regwr_resolve;
 
 // ============================================================
 // Hazard Tracking and Control
@@ -68,26 +72,54 @@ assign csr_regwr = OP == INSTR_SYS && (funct3 == 3'b001
 // Hazard on register operands
 assign rs1_hazard = regrd_rs1_en & regwr_pending & rpend == rs1;
 assign rs2_hazard = regrd_rs2_en & regwr_pending & rpend == rs2;
+assign regwr_pending = |rpend_count;
+assign regwr_resolve = regwr_en & regwr_pending & rpend == regwr_sel;
 
 // Stall condition if either operand has a hazard,
 // and register write back isn't ready
-assign stall = (rs1_hazard | rs2_hazard) & ~(regwr_en & rpend == regwr_sel);
+assign stall = (rs1_hazard | rs2_hazard) & ~(regwr_resolve & (rpend_count == 2'd1));
+
+always_comb begin
+  rpend_next = rpend;
+  rpend_count_next = rpend_count;
+
+  if (flush) begin
+    rpend_next = '0;
+    rpend_count_next = '0;
+  end
+  else begin
+    if (regwr_resolve) begin
+      if (rpend_count_next == 2'd1) begin
+        rpend_next = '0;
+        rpend_count_next = '0;
+      end
+      else begin
+        rpend_count_next = rpend_count_next - 2'd1;
+      end
+    end
+
+    if (fetch_vld && fetch_rdy) begin
+      if (is_reg_write) begin
+        if (rpend_count_next != '0 && rpend_next == rd) begin
+          if (rpend_count_next != 2'd3) rpend_count_next = rpend_count_next + 2'd1;
+        end
+        else begin
+          rpend_next = rd;
+          rpend_count_next = 2'd1;
+        end
+      end
+    end
+  end
+end
 
 always_ff @(posedge clk or negedge rstz) begin
   if (~rstz) begin
-    regwr_pending <= 1'b0;
+    rpend <= '0;
+    rpend_count <= '0;
   end
   else begin
-    if (flush) begin
-      regwr_pending <= 1'b0;
-    end
-    else if(fetch_vld && fetch_rdy) begin
-      regwr_pending <= is_reg_write;
-      rpend <= rd;
-    end
-    else if(regwr_pending) begin
-      regwr_pending <= ~(regwr_en & rpend == regwr_sel);
-    end
+    rpend <= rpend_next;
+    rpend_count <= rpend_count_next;
   end
 end
 
