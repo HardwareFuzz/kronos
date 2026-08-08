@@ -209,67 +209,180 @@ class Sim {
       log_of_ = std::make_unique<std::ofstream>(logfile);
       log_out_ = log_of_.get();
     }
+    (*log_out_) << "CXTRACE_HEADER v=2 core=kronos harts=1 isa=rv32"
+                << " build_config=kronos_compliance cycle_domain=core_ref_clk"
+                << " cycle_base=first_post_reset_posedge_is_1 interval=inclusive"
+                << " start_kind=backend_alloc end_kind=arch_commit_or_precise_trap\n";
   }
 
  private:
-  uint64_t normalize_start_cycle_(uint64_t raw, uint64_t fallback) const {
-    return raw != 0 ? raw : fallback;
+  void require_valid_interval_(const char* event, uint64_t token,
+                               uint64_t start, uint64_t end) const {
+    if (start == 0 || end < start) {
+      throw runtime_error(string("Invalid Kronos trace interval for ") + event +
+                          ": hart=0 token=" + std::to_string(token) +
+                          " start=" + std::to_string(start) +
+                          " end=" + std::to_string(end));
+    }
   }
 
   void log_sample_posedge_() {
     if (!(log_inst_ || log_reg_ || log_mem_ || log_trap_)) return;
     auto& R = *(top_->rootp);
+    // cycles_ includes reset edges. The RTL counter below is zero during
+    // reset and becomes one on the first post-reset posedge.
+    const uint64_t clk_end =
+        R.kronos_compliance_top__DOT__u_dut__DOT__u_ex__DOT__cycle_counter;
     if (log_inst_ && R.kronos_compliance_top__DOT__u_dut__DOT__u_ex__DOT__log_inst_pc_vld) {
-      uint32_t pc_inst = R.kronos_compliance_top__DOT__u_dut__DOT__u_ex__DOT__log_inst_pc;
-      uint64_t clk_start = normalize_start_cycle_(
-          R.kronos_compliance_top__DOT__u_dut__DOT__u_ex__DOT__log_inst_start_cycle, cycles_);
-      (*log_out_) << "[INST] pc=0x" << std::hex << pc_inst << std::dec
+      const uint32_t pc =
+          R.kronos_compliance_top__DOT__u_dut__DOT__u_ex__DOT__log_inst_pc;
+      const uint32_t insn =
+          R.kronos_compliance_top__DOT__u_dut__DOT__u_ex__DOT__log_inst_ir;
+      const uint64_t clk_start =
+          R.kronos_compliance_top__DOT__u_dut__DOT__u_ex__DOT__log_inst_start_cycle;
+      const uint64_t token =
+          R.kronos_compliance_top__DOT__u_dut__DOT__u_ex__DOT__log_inst_token;
+      const uint64_t term_seq =
+          R.kronos_compliance_top__DOT__u_dut__DOT__u_ex__DOT__log_inst_term_seq;
+      const uint64_t instret_seq =
+          R.kronos_compliance_top__DOT__u_dut__DOT__u_ex__DOT__log_inst_instret_seq;
+      require_valid_interval_("commit", token, clk_start, clk_end);
+      (*log_out_) << "[INST] pc=0x" << std::hex << pc << std::dec
+                  << " hart=0"
                   << " clk_start=" << clk_start
-                  << " clk_end=" << cycles_
-                  << " clk_span=" << (cycles_ - clk_start + 1) << "\n";
+                  << " clk_end=" << clk_end
+                  << " clk_span=" << (clk_end - clk_start + 1)
+                  << " token=" << token
+                  << " term_seq=" << term_seq
+                  << " instret_seq=" << instret_seq
+                  << " retired=1 trap=0 intr=0"
+                  << " start_kind=backend_alloc end_kind=arch_commit\n";
+      (*log_out_) << "CXTRACE v=2 event=inst_terminal core=kronos"
+                  << " hart=0 token=" << token
+                  << " term_seq=" << term_seq
+                  << " instret_seq=" << instret_seq
+                  << " commit_slot=0 pc=0x" << std::hex << pc
+                  << " insn=0x" << insn << std::dec
+                  << " insn_len=" << (((insn & 3u) == 3u) ? 4 : 2)
+                  << " start_cycle=" << clk_start
+                  << " end_cycle=" << clk_end
+                  << " span=" << (clk_end - clk_start + 1)
+                  << " start_kind=backend_alloc end_kind=arch_commit"
+                  << " retired=1 trap=0 cause=none priv=3\n";
     }
     if (log_reg_ && R.kronos_compliance_top__DOT__u_dut__DOT__u_ex__DOT__log_reg_pc_vld) {
-      uint32_t pc_reg = R.kronos_compliance_top__DOT__u_dut__DOT__u_ex__DOT__log_reg_pc;
-      uint64_t clk_start = normalize_start_cycle_(
-          R.kronos_compliance_top__DOT__u_dut__DOT__u_ex__DOT__log_reg_start_cycle, cycles_);
-      uint32_t rd = R.kronos_compliance_top__DOT__u_dut__DOT__u_ex__DOT__log_reg_rd & 0x1fu;
-      uint32_t rdv = R.kronos_compliance_top__DOT__u_dut__DOT__u_ex__DOT__log_reg_data;
-      (*log_out_) << "[REG] pc=0x" << std::hex << pc_reg
-                  << " x" << std::dec << rd
-                  << " <= 0x" << std::hex << rdv << std::dec
-                  << " clk_start=" << clk_start
-                  << " clk_end=" << cycles_
-                  << " clk_span=" << (cycles_ - clk_start + 1) << "\n";
+      const uint32_t pc =
+          R.kronos_compliance_top__DOT__u_dut__DOT__u_ex__DOT__log_reg_pc;
+      const uint64_t clk_start =
+          R.kronos_compliance_top__DOT__u_dut__DOT__u_ex__DOT__log_reg_start_cycle;
+      const uint64_t token =
+          R.kronos_compliance_top__DOT__u_dut__DOT__u_ex__DOT__log_reg_token;
+      const uint32_t rd =
+          R.kronos_compliance_top__DOT__u_dut__DOT__u_ex__DOT__log_reg_rd & 0x1fu;
+      const uint32_t value =
+          R.kronos_compliance_top__DOT__u_dut__DOT__u_ex__DOT__log_reg_data;
+      require_valid_interval_("writeback", token, clk_start, clk_end);
+      if (rd != 0) {
+        (*log_out_) << "[REG] pc=0x" << std::hex << pc
+                    << " x" << std::dec << rd
+                    << " <= 0x" << std::hex << value << std::dec
+                    << " hart=0 clk_start=" << clk_start
+                    << " clk_end=" << clk_end
+                    << " clk_span=" << (clk_end - clk_start + 1)
+                    << " token=" << token
+                    << " event=writeback terminal=0\n";
+        (*log_out_) << "CXTRACE v=2 event=writeback core=kronos hart=0"
+                    << " token=" << token << " cycle=" << clk_end
+                    << " pc=0x" << std::hex << pc << std::dec
+                    << " rd=" << rd << " data=0x" << std::hex << value
+                    << std::dec << "\n";
+      }
     }
     if (log_mem_ && R.kronos_compliance_top__DOT__u_dut__DOT__u_ex__DOT__log_mem_pc_vld) {
-      uint32_t addr = R.kronos_compliance_top__DOT__u_dut__DOT__u_ex__DOT__log_mem_addr;
-      uint32_t wdata = R.kronos_compliance_top__DOT__u_dut__DOT__u_ex__DOT__log_mem_data;
-      uint32_t mask = R.kronos_compliance_top__DOT__u_dut__DOT__u_ex__DOT__log_mem_mask;
-      uint32_t pc_mem = R.kronos_compliance_top__DOT__u_dut__DOT__u_ex__DOT__log_mem_pc;
-      uint64_t clk_start = normalize_start_cycle_(
-          R.kronos_compliance_top__DOT__u_dut__DOT__u_ex__DOT__log_mem_start_cycle, cycles_);
-      (*log_out_) << "[MEMW] pc=0x" << std::hex << pc_mem
+      const uint32_t addr =
+          R.kronos_compliance_top__DOT__u_dut__DOT__u_ex__DOT__log_mem_addr;
+      const uint32_t data =
+          R.kronos_compliance_top__DOT__u_dut__DOT__u_ex__DOT__log_mem_data;
+      const uint32_t mask =
+          R.kronos_compliance_top__DOT__u_dut__DOT__u_ex__DOT__log_mem_mask & 0xfu;
+      const uint32_t pc =
+          R.kronos_compliance_top__DOT__u_dut__DOT__u_ex__DOT__log_mem_pc;
+      const uint64_t clk_start =
+          R.kronos_compliance_top__DOT__u_dut__DOT__u_ex__DOT__log_mem_start_cycle;
+      const uint64_t token =
+          R.kronos_compliance_top__DOT__u_dut__DOT__u_ex__DOT__log_mem_token;
+      require_valid_interval_("store_effect", token, clk_start, clk_end);
+      (*log_out_) << "[MEMW] pc=0x" << std::hex << pc
                   << " addr=0x" << addr
-                  << " data=0x" << wdata
+                  << " data=0x" << data
                   << " mask=0x" << mask << std::dec
-                  << " clk_start=" << clk_start
-                  << " clk_end=" << cycles_
-                  << " clk_span=" << (cycles_ - clk_start + 1) << "\n";
+                  << " hart=0 clk_start=" << clk_start
+                  << " clk_end=" << clk_end
+                  << " clk_span=" << (clk_end - clk_start + 1)
+                  << " token=" << token
+                  << " event=store_effect terminal=0\n";
+      (*log_out_) << "CXTRACE v=2 event=store_visible core=kronos hart=0"
+                  << " token=" << token << " cycle=" << clk_end
+                  << " pc=0x" << std::hex << pc << " addr=0x" << addr
+                  << " data=0x" << data << " mask=0x" << mask
+                  << std::dec << "\n";
     }
     if (log_trap_ && R.kronos_compliance_top__DOT__u_dut__DOT__u_ex__DOT__log_trap_pc_vld) {
-      uint8_t exception_flag = R.kronos_compliance_top__DOT__u_dut__DOT__u_ex__DOT__exception;
-      uint8_t irq_flag = R.kronos_compliance_top__DOT__u_dut__DOT__u_ex__DOT__core_interrupt;
-      uint32_t cause = R.kronos_compliance_top__DOT__u_dut__DOT__u_ex__DOT__trap_cause;
-      uint32_t pc = R.kronos_compliance_top__DOT__u_dut__DOT__u_ex__DOT__log_trap_pc;
-      uint64_t clk_start = normalize_start_cycle_(
-          R.kronos_compliance_top__DOT__u_dut__DOT__u_ex__DOT__log_trap_start_cycle, cycles_);
+      const uint32_t pc =
+          R.kronos_compliance_top__DOT__u_dut__DOT__u_ex__DOT__log_trap_pc;
+      const uint32_t insn =
+          R.kronos_compliance_top__DOT__u_dut__DOT__u_ex__DOT__log_trap_ir;
+      const uint32_t cause =
+          R.kronos_compliance_top__DOT__u_dut__DOT__u_ex__DOT__trap_cause;
+      const uint64_t clk_start =
+          R.kronos_compliance_top__DOT__u_dut__DOT__u_ex__DOT__log_trap_start_cycle;
+      const uint64_t token =
+          R.kronos_compliance_top__DOT__u_dut__DOT__u_ex__DOT__log_trap_token;
+      const uint64_t term_seq =
+          R.kronos_compliance_top__DOT__u_dut__DOT__u_ex__DOT__log_trap_term_seq;
+      const uint64_t instret_seq =
+          R.kronos_compliance_top__DOT__u_dut__DOT__u_ex__DOT__log_trap_instret_seq;
+      const bool token_valid =
+          R.kronos_compliance_top__DOT__u_dut__DOT__u_ex__DOT__log_trap_token_vld;
+      const bool irq =
+          R.kronos_compliance_top__DOT__u_dut__DOT__u_ex__DOT__log_trap_irq;
+      require_valid_interval_(token_valid ? "precise_trap" : "interrupt",
+                              token, clk_start, clk_end);
       (*log_out_) << "[TRAP] pc=0x" << std::hex << pc
-                  << " exception=" << static_cast<int>(exception_flag)
-                  << " irq=" << static_cast<int>(irq_flag)
+                  << " exception=" << static_cast<int>(token_valid)
+                  << " irq=" << static_cast<int>(irq)
                   << " cause=0x" << cause << std::dec
-                  << " clk_start=" << clk_start
-                  << " clk_end=" << cycles_
-                  << " clk_span=" << (cycles_ - clk_start + 1) << "\n";
+                  << " hart=0 clk_start=" << clk_start
+                  << " clk_end=" << clk_end
+                  << " clk_span=" << (clk_end - clk_start + 1)
+                  << " token=" << token
+                  << " token_valid=" << static_cast<int>(token_valid)
+                  << " term_seq=" << term_seq
+                  << " instret_seq=" << instret_seq
+                  << " retired=0 trap=" << static_cast<int>(token_valid)
+                  << " intr=" << static_cast<int>(irq)
+                  << " start_kind=" << (token_valid ? "backend_alloc" : "none")
+                  << " end_kind=" << (token_valid ? "precise_trap" : "interrupt")
+                  << "\n";
+      if (token_valid) {
+        (*log_out_) << "CXTRACE v=2 event=inst_terminal core=kronos"
+                    << " hart=0 token=" << token
+                    << " term_seq=" << term_seq
+                    << " instret_seq=- commit_slot=0 pc=0x" << std::hex << pc
+                    << " insn=0x" << insn << std::dec
+                    << " insn_len=" << (((insn & 3u) == 3u) ? 4 : 2)
+                    << " start_cycle=" << clk_start
+                    << " end_cycle=" << clk_end
+                    << " span=" << (clk_end - clk_start + 1)
+                    << " start_kind=backend_alloc end_kind=precise_trap"
+                    << " retired=0 trap=1 cause=0x" << std::hex << cause
+                    << std::dec << " priv=3\n";
+      }
+      else {
+        (*log_out_) << "CXTRACE v=2 event=interrupt core=kronos hart=0"
+                    << " cycle=" << clk_end << " cause=0x" << std::hex << cause
+                    << std::dec << " priv=3\n";
+      }
     }
   }
 
