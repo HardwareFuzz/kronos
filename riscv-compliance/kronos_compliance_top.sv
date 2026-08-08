@@ -83,6 +83,7 @@ end
 // ------------------------------------------------------------
 // Trace monitors (per core)
 // Exposed via `public_flat` so the C++ runner can log dual-hart traces.
+logic [63:0] trace_cycle [NUM_CORES] /* verilator public_flat */;
 logic [31:0] trace_reg_pc   [NUM_CORES] /* verilator public_flat */;
 logic        trace_reg_vld  [NUM_CORES] /* verilator public_flat */;
 logic [4:0]  trace_reg_rd   [NUM_CORES] /* verilator public_flat */;
@@ -91,6 +92,7 @@ logic [31:0] trace_reg_ir   [NUM_CORES] /* verilator public_flat */;
 logic [31:0] trace_reg_op1  [NUM_CORES] /* verilator public_flat */;
 logic [31:0] trace_reg_op2  [NUM_CORES] /* verilator public_flat */;
 logic [63:0] trace_reg_start_cycle [NUM_CORES] /* verilator public_flat */;
+logic [63:0] trace_reg_token [NUM_CORES] /* verilator public_flat */;
 
 logic [31:0] trace_mem_pc   [NUM_CORES] /* verilator public_flat */;
 logic        trace_mem_vld  [NUM_CORES] /* verilator public_flat */;
@@ -98,19 +100,31 @@ logic [31:0] trace_mem_addr [NUM_CORES] /* verilator public_flat */;
 logic [31:0] trace_mem_data [NUM_CORES] /* verilator public_flat */;
 logic [3:0]  trace_mem_mask [NUM_CORES] /* verilator public_flat */;
 logic [63:0] trace_mem_start_cycle [NUM_CORES] /* verilator public_flat */;
+logic [63:0] trace_mem_token [NUM_CORES] /* verilator public_flat */;
 
 logic [31:0] trace_inst_pc   [NUM_CORES] /* verilator public_flat */;
+logic [31:0] trace_inst_ir   [NUM_CORES] /* verilator public_flat */;
 logic        trace_inst_vld  [NUM_CORES] /* verilator public_flat */;
 logic [63:0] trace_inst_start_cycle [NUM_CORES] /* verilator public_flat */;
+logic [63:0] trace_inst_token [NUM_CORES] /* verilator public_flat */;
+logic [63:0] trace_inst_term_seq [NUM_CORES] /* verilator public_flat */;
+logic [63:0] trace_inst_instret_seq [NUM_CORES] /* verilator public_flat */;
 
 logic [31:0] trace_trap_pc    [NUM_CORES] /* verilator public_flat */;
+logic [31:0] trace_trap_ir    [NUM_CORES] /* verilator public_flat */;
 logic        trace_trap_vld   [NUM_CORES] /* verilator public_flat */;
 logic [31:0] trace_trap_cause [NUM_CORES] /* verilator public_flat */;
 logic        trace_trap_exception [NUM_CORES] /* verilator public_flat */;
 logic        trace_trap_irq   [NUM_CORES] /* verilator public_flat */;
 logic [63:0] trace_trap_start_cycle [NUM_CORES] /* verilator public_flat */;
+logic [63:0] trace_trap_token [NUM_CORES] /* verilator public_flat */;
+logic [63:0] trace_trap_term_seq [NUM_CORES] /* verilator public_flat */;
+logic [63:0] trace_trap_instret_seq [NUM_CORES] /* verilator public_flat */;
+logic        trace_trap_token_vld [NUM_CORES] /* verilator public_flat */;
 
 for (genvar t = 0; t < NUM_CORES; t++) begin : gen_trace
+  assign trace_cycle[t] = gen_cores[t].u_core.u_ex.cycle_counter;
+
   // Register writeback
   assign trace_reg_pc[t] = gen_cores[t].u_core.u_ex.log_reg_pc;
   assign trace_reg_vld[t] = gen_cores[t].u_core.u_ex.log_reg_pc_vld;
@@ -121,6 +135,7 @@ for (genvar t = 0; t < NUM_CORES; t++) begin : gen_trace
   assign trace_reg_op1[t] = gen_cores[t].u_core.u_ex.log_reg_op1;
   assign trace_reg_op2[t] = gen_cores[t].u_core.u_ex.log_reg_op2;
   assign trace_reg_start_cycle[t] = gen_cores[t].u_core.u_ex.log_reg_start_cycle;
+  assign trace_reg_token[t] = gen_cores[t].u_core.u_ex.log_reg_token;
 
   // Architectural store events
   assign trace_mem_pc[t] = gen_cores[t].u_core.u_ex.log_mem_pc;
@@ -129,19 +144,29 @@ for (genvar t = 0; t < NUM_CORES; t++) begin : gen_trace
   assign trace_mem_data[t] = gen_cores[t].u_core.u_ex.log_mem_data;
   assign trace_mem_mask[t] = gen_cores[t].u_core.u_ex.log_mem_mask;
   assign trace_mem_start_cycle[t] = gen_cores[t].u_core.u_ex.log_mem_start_cycle;
+  assign trace_mem_token[t] = gen_cores[t].u_core.u_ex.log_mem_token;
 
   // Generic retired-instruction timing events
   assign trace_inst_pc[t] = gen_cores[t].u_core.u_ex.log_inst_pc;
+  assign trace_inst_ir[t] = gen_cores[t].u_core.u_ex.log_inst_ir;
   assign trace_inst_vld[t] = gen_cores[t].u_core.u_ex.log_inst_pc_vld;
   assign trace_inst_start_cycle[t] = gen_cores[t].u_core.u_ex.log_inst_start_cycle;
+  assign trace_inst_token[t] = gen_cores[t].u_core.u_ex.log_inst_token;
+  assign trace_inst_term_seq[t] = gen_cores[t].u_core.u_ex.log_inst_term_seq;
+  assign trace_inst_instret_seq[t] = gen_cores[t].u_core.u_ex.log_inst_instret_seq;
 
   // Trap/exception events
   assign trace_trap_pc[t] = gen_cores[t].u_core.u_ex.log_trap_pc;
+  assign trace_trap_ir[t] = gen_cores[t].u_core.u_ex.log_trap_ir;
   assign trace_trap_vld[t] = gen_cores[t].u_core.u_ex.log_trap_pc_vld;
   assign trace_trap_cause[t] = gen_cores[t].u_core.u_ex.trap_cause;
   assign trace_trap_exception[t] = gen_cores[t].u_core.u_ex.exception;
-  assign trace_trap_irq[t] = gen_cores[t].u_core.u_ex.core_interrupt;
+  assign trace_trap_irq[t] = gen_cores[t].u_core.u_ex.log_trap_irq;
   assign trace_trap_start_cycle[t] = gen_cores[t].u_core.u_ex.log_trap_start_cycle;
+  assign trace_trap_token[t] = gen_cores[t].u_core.u_ex.log_trap_token;
+  assign trace_trap_term_seq[t] = gen_cores[t].u_core.u_ex.log_trap_term_seq;
+  assign trace_trap_instret_seq[t] = gen_cores[t].u_core.u_ex.log_trap_instret_seq;
+  assign trace_trap_token_vld[t] = gen_cores[t].u_core.u_ex.log_trap_token_vld;
 end
 
 typedef enum logic [2:0] {

@@ -219,7 +219,9 @@ endclocking
       $display("-----------------\n\n");
     end
 
-    check_minstret(256);
+    // ECALL terminates with a precise exception and is not retired. Only the
+    // matching MRET contributes to minstret.
+    check_minstret(128);
 
     ##32;
   end
@@ -290,7 +292,9 @@ endclocking
       $display("-----------------\n\n");
     end
 
-    check_minstret(256);
+    // EBREAK terminates with a precise exception and is not retired. Only the
+    // matching MRET contributes to minstret.
+    check_minstret(128);
 
     ##32;
   end

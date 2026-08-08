@@ -65,8 +65,13 @@ logic [31:0] trap_cause /* verilator public_flat */, trap_handle, trap_value;
 logic trap_jump /* verilator public_flat */;
 
 logic [31:0] exec_pc;
+logic [31:0] exec_ir;
 logic [63:0] cycle_counter /* verilator public_flat */;
 logic [63:0] exec_start_cycle;
+logic [63:0] exec_token;
+logic [63:0] next_alloc_token;
+logic [63:0] next_terminal_seq;
+logic [63:0] next_instret_seq;
 logic [31:0] exec_mem_addr;
 logic [31:0] exec_mem_data;
 logic [3:0]  exec_mem_mask;
@@ -76,31 +81,51 @@ logic [31:0] log_reg_ir /* verilator public_flat */;
 logic [31:0] log_reg_op1 /* verilator public_flat */;
 logic [31:0] log_reg_op2 /* verilator public_flat */;
 logic [63:0] log_reg_start_cycle /* verilator public_flat */;
+logic [63:0] log_reg_token /* verilator public_flat */;
 logic [31:0] log_mem_pc /* verilator public_flat */;
 logic        log_mem_pc_vld /* verilator public_flat */;
 logic [31:0] log_mem_addr /* verilator public_flat */;
 logic [31:0] log_mem_data /* verilator public_flat */;
 logic [3:0]  log_mem_mask /* verilator public_flat */;
 logic [63:0] log_mem_start_cycle /* verilator public_flat */;
+logic [63:0] log_mem_token /* verilator public_flat */;
 logic [31:0] log_inst_pc /* verilator public_flat */;
+logic [31:0] log_inst_ir /* verilator public_flat */;
 logic        log_inst_pc_vld /* verilator public_flat */;
 logic [63:0] log_inst_start_cycle /* verilator public_flat */;
+logic [63:0] log_inst_token /* verilator public_flat */;
+logic [63:0] log_inst_term_seq /* verilator public_flat */;
+logic [63:0] log_inst_instret_seq /* verilator public_flat */;
 logic [31:0] log_trap_pc /* verilator public_flat */;
+logic [31:0] log_trap_ir /* verilator public_flat */;
 logic        log_trap_pc_vld /* verilator public_flat */;
 logic [63:0] log_trap_start_cycle /* verilator public_flat */;
+logic [63:0] log_trap_token /* verilator public_flat */;
+logic [63:0] log_trap_term_seq /* verilator public_flat */;
+logic [63:0] log_trap_instret_seq /* verilator public_flat */;
+logic        log_trap_token_vld /* verilator public_flat */;
+logic        log_trap_irq /* verilator public_flat */;
 logic        inst_log_fire;
 logic [31:0] inst_log_pc;
+logic [31:0] inst_log_ir;
 logic [63:0] inst_log_start_cycle;
+logic [63:0] inst_log_token;
 logic        regwr_fire;
 logic [31:0] regwr_log_pc;
 logic [63:0] regwr_log_start_cycle;
+logic [63:0] regwr_log_token;
 logic        memwr_fire;
 logic [31:0] memwr_log_pc;
 logic [63:0] memwr_log_start_cycle;
+logic [63:0] memwr_log_token;
 logic        trap_log_fire;
 logic [31:0] trap_log_pc;
+logic [31:0] trap_log_ir;
 logic [63:0] trap_log_start_cycle;
-logic        track_exec_meta;
+logic [63:0] trap_log_token;
+logic        trap_log_token_vld;
+logic        trap_log_irq;
+logic        alloc_fire;
 
 enum logic [2:0] {
   STEADY,
@@ -166,12 +191,28 @@ end
 
 // Decoded instruction valid
 assign instr_vld = decode_vld && state == STEADY && ~exception && ~core_interrupt;
-assign track_exec_meta = decode_vld && state == STEADY && (decode.load || decode.store || decode.csr ||
-                       core_interrupt || exception || decode.system);
+// Allocation is the first cycle in which EX formally accepts the decoded
+// instruction. An interrupt wins before allocation and is logged separately,
+// so it never consumes an instruction token.
+assign alloc_fire = decode_vld && state == STEADY && ~core_interrupt;
 
 always_ff @(posedge clk or negedge rstz) begin
   if (~rstz) cycle_counter <= '0;
   else cycle_counter <= cycle_counter + 64'd1;
+end
+
+always_ff @(posedge clk or negedge rstz) begin
+  if (~rstz) begin
+    next_alloc_token <= '0;
+    next_terminal_seq <= '0;
+    next_instret_seq <= '0;
+  end
+  else begin
+    if (alloc_fire) next_alloc_token <= next_alloc_token + 64'd1;
+    if (inst_log_fire || (trap_log_fire && trap_log_token_vld))
+      next_terminal_seq <= next_terminal_seq + 64'd1;
+    if (inst_log_fire) next_instret_seq <= next_instret_seq + 64'd1;
+  end
 end
 
 // Basic instructions
@@ -181,13 +222,25 @@ assign basic_rdy = instr_vld && decode.basic;
 assign decode_rdy = |{basic_rdy, lsu_rdy, csr_rdy};
 
 always_ff @(posedge clk or negedge rstz) begin
-  if (~rstz) exec_pc <= '0;
-  else if (track_exec_meta) exec_pc <= decode.pc;
+  if (~rstz) begin
+    exec_pc <= '0;
+    exec_ir <= '0;
+  end
+  else if (alloc_fire) begin
+    exec_pc <= decode.pc;
+    exec_ir <= decode.ir;
+  end
 end
 
 always_ff @(posedge clk or negedge rstz) begin
-  if (~rstz) exec_start_cycle <= '0;
-  else if (track_exec_meta) exec_start_cycle <= cycle_counter + 64'd1;
+  if (~rstz) begin
+    exec_start_cycle <= '0;
+    exec_token <= '0;
+  end
+  else if (alloc_fire) begin
+    exec_start_cycle <= cycle_counter + 64'd1;
+    exec_token <= next_alloc_token;
+  end
 end
 
 always_ff @(posedge clk or negedge rstz) begin
@@ -206,21 +259,28 @@ end
 always_comb begin
   inst_log_fire = 1'b0;
   inst_log_pc = exec_pc;
+  inst_log_ir = exec_ir;
   inst_log_start_cycle = exec_start_cycle;
+  inst_log_token = exec_token;
 
   if (basic_rdy) begin
     inst_log_fire = 1'b1;
     inst_log_pc = decode.pc;
+    inst_log_ir = decode.ir;
     inst_log_start_cycle = cycle_counter + 64'd1;
+    inst_log_token = next_alloc_token;
   end
   else if (lsu_rdy || csr_rdy) begin
     inst_log_fire = 1'b1;
     if (state == STEADY) begin
       inst_log_pc = decode.pc;
+      inst_log_ir = decode.ir;
       inst_log_start_cycle = cycle_counter + 64'd1;
+      inst_log_token = next_alloc_token;
     end
   end
-  else if (decode.system && trap_jump) begin
+  else if (decode.system && trap_jump &&
+           (decode.sysop == MRET || decode.sysop == WFI)) begin
     inst_log_fire = 1'b1;
   end
 end
@@ -229,21 +289,29 @@ always_comb begin
   regwr_fire = 1'b0;
   regwr_log_pc = exec_pc;
   regwr_log_start_cycle = exec_start_cycle;
+  regwr_log_token = exec_token;
 
   if (instr_vld && decode.regwr_alu) begin
     regwr_fire = 1'b1;
     regwr_log_pc = decode.pc;
     regwr_log_start_cycle = cycle_counter + 64'd1;
+    regwr_log_token = next_alloc_token;
   end
   else if (lsu_rdy && regwr_lsu) begin
     regwr_fire = 1'b1;
     if (state == STEADY) begin
       regwr_log_pc = decode.pc;
       regwr_log_start_cycle = cycle_counter + 64'd1;
+      regwr_log_token = next_alloc_token;
     end
   end
   else if (csr_rdy && regwr_csr) begin
     regwr_fire = 1'b1;
+    if (state == STEADY) begin
+      regwr_log_pc = decode.pc;
+      regwr_log_start_cycle = cycle_counter + 64'd1;
+      regwr_log_token = next_alloc_token;
+    end
   end
 end
 
@@ -251,12 +319,14 @@ always_comb begin
   memwr_fire = 1'b0;
   memwr_log_pc = exec_pc;
   memwr_log_start_cycle = exec_start_cycle;
+  memwr_log_token = exec_token;
 
   if (lsu_rdy && decode.store) begin
     memwr_fire = 1'b1;
     if (state == STEADY) begin
       memwr_log_pc = decode.pc;
       memwr_log_start_cycle = cycle_counter + 64'd1;
+      memwr_log_token = next_alloc_token;
     end
   end
 end
@@ -264,31 +334,60 @@ end
 always_comb begin
   trap_log_fire = 1'b0;
   trap_log_pc = exec_pc;
+  trap_log_ir = exec_ir;
   trap_log_start_cycle = exec_start_cycle;
+  trap_log_token = exec_token;
+  trap_log_token_vld = 1'b0;
+  trap_log_irq = 1'b0;
 
   if (state == STEADY && decode_vld && (core_interrupt || exception
       || (decode.system && (decode.sysop == ECALL || decode.sysop == EBREAK)))) begin
     trap_log_fire = 1'b1;
     trap_log_pc = decode.pc;
-    trap_log_start_cycle = cycle_counter + 64'd1;
+    trap_log_ir = decode.ir;
+    trap_log_irq = core_interrupt;
+    if (core_interrupt) begin
+      trap_log_start_cycle = cycle_counter + 64'd1;
+      trap_log_token = '0;
+    end
+    else begin
+      trap_log_start_cycle = cycle_counter + 64'd1;
+      trap_log_token = next_alloc_token;
+      trap_log_token_vld = 1'b1;
+    end
   end
   else if (state == WFINTR && core_interrupt) begin
     trap_log_fire = 1'b1;
+    trap_log_start_cycle = cycle_counter + 64'd1;
+    trap_log_token = '0;
+    trap_log_irq = 1'b1;
   end
 end
 
 always_ff @(posedge clk or negedge rstz) begin
   if (~rstz) begin
     log_inst_pc <= '0;
+    log_inst_ir <= '0;
     log_inst_pc_vld <= 1'b0;
     log_inst_start_cycle <= '0;
+    log_inst_token <= '0;
+    log_inst_term_seq <= '0;
+    log_inst_instret_seq <= '0;
   end
   else begin
     log_inst_pc_vld <= inst_log_fire;
     if (inst_log_fire) begin
       log_inst_pc <= inst_log_pc;
+      log_inst_ir <= inst_log_ir;
       log_inst_start_cycle <= inst_log_start_cycle;
+      log_inst_token <= inst_log_token;
+      log_inst_term_seq <= next_terminal_seq;
+      log_inst_instret_seq <= next_instret_seq;
     end
+    if (inst_log_fire && (inst_log_start_cycle == 0 ||
+                          cycle_counter + 64'd1 < inst_log_start_cycle))
+      $error("Kronos commit timing invariant failed: token=%0d start=%0d end=%0d",
+             inst_log_token, inst_log_start_cycle, cycle_counter + 64'd1);
   end
 end
 
@@ -300,6 +399,7 @@ always_ff @(posedge clk or negedge rstz) begin
     log_reg_op1 <= '0;
     log_reg_op2 <= '0;
     log_reg_start_cycle <= '0;
+    log_reg_token <= '0;
   end
   else begin
     log_reg_pc_vld <= regwr_fire;
@@ -309,6 +409,7 @@ always_ff @(posedge clk or negedge rstz) begin
       log_reg_op1 <= decode.op1;
       log_reg_op2 <= decode.op2;
       log_reg_start_cycle <= regwr_log_start_cycle;
+      log_reg_token <= regwr_log_token;
     end
   end
 end
@@ -321,6 +422,7 @@ always_ff @(posedge clk or negedge rstz) begin
     log_mem_data <= '0;
     log_mem_mask <= '0;
     log_mem_start_cycle <= '0;
+    log_mem_token <= '0;
   end
   else begin
     log_mem_pc_vld <= memwr_fire;
@@ -337,6 +439,7 @@ always_ff @(posedge clk or negedge rstz) begin
         log_mem_mask <= exec_mem_mask;
       end
       log_mem_start_cycle <= memwr_log_start_cycle;
+      log_mem_token <= memwr_log_token;
     end
   end
 end
@@ -344,15 +447,31 @@ end
 always_ff @(posedge clk or negedge rstz) begin
   if (~rstz) begin
     log_trap_pc <= '0;
+    log_trap_ir <= '0;
     log_trap_pc_vld <= 1'b0;
     log_trap_start_cycle <= '0;
+    log_trap_token <= '0;
+    log_trap_term_seq <= '0;
+    log_trap_instret_seq <= '0;
+    log_trap_token_vld <= 1'b0;
+    log_trap_irq <= 1'b0;
   end
   else begin
     log_trap_pc_vld <= trap_log_fire;
     if (trap_log_fire) begin
       log_trap_pc <= trap_log_pc;
+      log_trap_ir <= trap_log_ir;
       log_trap_start_cycle <= trap_log_start_cycle;
+      log_trap_token <= trap_log_token;
+      log_trap_term_seq <= next_terminal_seq;
+      log_trap_instret_seq <= next_instret_seq;
+      log_trap_token_vld <= trap_log_token_vld;
+      log_trap_irq <= trap_log_irq;
     end
+    if (trap_log_fire && trap_log_token_vld &&
+        (trap_log_start_cycle == 0 || cycle_counter + 64'd1 < trap_log_start_cycle))
+      $error("Kronos trap timing invariant failed: token=%0d start=%0d end=%0d",
+             trap_log_token, trap_log_start_cycle, cycle_counter + 64'd1);
   end
 end
 
@@ -504,7 +623,8 @@ assign return_trap = state == RETURN;
 always_ff @(posedge clk or negedge rstz) begin
   if (~rstz) instret <= 1'b0;
   else instret <= (decode_vld && decode_rdy)
-              || (decode.system && trap_jump);
+              || (decode.system && trap_jump &&
+                  (decode.sysop == MRET || decode.sysop == WFI));
 end
 
 endmodule
