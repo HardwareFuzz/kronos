@@ -59,6 +59,7 @@ logic is_fencei;
 logic illegal;
 logic instr_valid;
 logic illegal_opcode;
+logic csr_addr_ok;
 
 // Address generation
 logic [31:0] addr, base, offset;
@@ -95,6 +96,30 @@ assign data_size = funct3[1:0];
 
 // opcode is illegal if LSB 2b are not 2'b11
 assign illegal_opcode = opcode[1:0] != 2'b11;
+
+// CSR address validity - only the CSRs implemented by kronos_csr (see
+// kronos_types.sv) are legal. Per the RISC-V privileged spec, an access to a
+// CSR that does not exist in the implementation MUST raise an
+// illegal-instruction exception (mcause=2). Without this gate, an access to an
+// unimplemented CSR silently reads 0 / ignores the write instead of trapping.
+always_comb begin
+  csr_addr_ok = 1'b0;
+  unique case (IR[31:20])
+    MSTATUS,
+    MIE,
+    MTVEC,
+    MSCRATCH,
+    MEPC,
+    MCAUSE,
+    MTVAL,
+    MIP,
+    MCYCLE,
+    MINSTRET,
+    MCYCLEH,
+    MINSTRETH: csr_addr_ok = 1'b1;
+    default  : csr_addr_ok = 1'b0;
+  endcase // IR[31:20]
+end
 
 // ============================================================
 // Register Write
@@ -328,13 +353,15 @@ always_comb begin
         3'b011: begin // CSRRC
           op1 = rs1_data;
           csr = 1'b1;
-          instr_valid = 1'b1;
+          // Only allow CSRs implemented by kronos_csr; accesses to any other
+          // CSR address are illegal (traps with mcause=2)
+          instr_valid = csr_addr_ok;
         end
         3'b101,       // CSRRWI
         3'b110,       // CSRRSI
         3'b111: begin // CSRRCI
           csr = 1'b1;
-          instr_valid = 1'b1;
+          instr_valid = csr_addr_ok;
         end
       endcase // funct3
     end
